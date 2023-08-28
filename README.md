@@ -6,7 +6,7 @@ xlsx2erl
 如果觉得对你有帮助，请给我颗小星星吧！
 
 效果图:
-[image](效果图.png)
+![image](效果图.png)
 
 Build
 -----
