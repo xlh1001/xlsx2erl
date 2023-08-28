@@ -3,6 +3,8 @@ xlsx2erl
 
 将满足一定格式的excel表格转换成erlang的配置表（学习wxwidgets练手项目）
 
+如果觉得对你有帮助，请给我颗小星星吧！
+
 Build
 -----
 

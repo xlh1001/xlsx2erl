@@ -261,7 +261,7 @@ change_tips(State) ->
     
 
 handle_menu_select_event(#wx{id = ?wxID_ABOUT}, State = #state{frame = Frame}) ->
-    AboutString = "author-VG_xiao\n\n地址:https://github.com/xlh1001/xlsx2erl\n\n",
+    AboutString = "author-VG_xiao\n\n地址:https://github.com/xlh1001/xlsx2erl\n\n如果觉得有帮助请给我点个小星星吧！",
     Dialog = wxMessageDialog:new(Frame, AboutString, [{style, ?wxOK bor ?wxICON_INFORMATION bor ?wxSTAY_ON_TOP}, {caption, "About"}]),
     wxMessageDialog:showModal(Dialog),
     wxMessageDialog:destroy(Dialog),
