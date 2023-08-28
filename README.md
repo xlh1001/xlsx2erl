@@ -6,7 +6,7 @@ xlsx2erl
 Build
 -----
 
-    $ ./rebar3 compile
+    ./rebar3 compile
 
 
 Run
@@ -35,8 +35,6 @@ Config配置说明：
         }
     ].    
 
-excel格式定义：
------
     {header_def, [{行数，标识， 数据类型（该行的数据类型）}]}
     
         第一行： 配置表字段注释，数据类型为string

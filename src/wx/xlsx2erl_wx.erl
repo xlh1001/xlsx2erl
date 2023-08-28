@@ -261,10 +261,7 @@ change_tips(State) ->
     
 
 handle_menu_select_event(#wx{id = ?wxID_ABOUT}, State = #state{frame = Frame}) ->
-    WxWVer = io_lib:format("~p.~p.~p.~p", [?wxMAJOR_VERSION, ?wxMINOR_VERSION, ?wxRELEASE_NUMBER, ?wxSUBRELEASE_NUMBER]),
-    application:load(wx),
-    {ok, WxVsn} = application:get_key(wx,  vsn),
-    AboutString = "author-VG_xiao\n\nwx application vsn:" ++ WxVsn ++ "\nBackend: wxWidgets-"++WxWVer,
+    AboutString = "author-VG_xiao\n\n地址:https://github.com/xlh1001/xlsx2erl\n\n",
     Dialog = wxMessageDialog:new(Frame, AboutString, [{style, ?wxOK bor ?wxICON_INFORMATION bor ?wxSTAY_ON_TOP}, {caption, "About"}]),
     wxMessageDialog:showModal(Dialog),
     wxMessageDialog:destroy(Dialog),
