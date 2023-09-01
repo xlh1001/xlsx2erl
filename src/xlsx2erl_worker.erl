@@ -116,6 +116,9 @@ do_handle_cast({work, ExcelName}, #{excel_path := ExcelPath} = State) ->
         {false, Row, lost_key_cloumn} ->
             info("第~p行主键缺失! ~n",[Row]),
             xlsx2erl:fail(self(), ExcelName);
+        {false, Arity, fun_args_not_exist} ->
+            info("导出函数中所需字段~s不存在! ~n",[Arity]),
+            xlsx2erl:fail(self(), ExcelName);
         _Err ->
             info("导出失败 reason :~p ~n",[_Err]),
             xlsx2erl:fail(self(), ExcelName)

@@ -44,6 +44,9 @@ make_share_table(ExcelData) ->
 	share_table(SharedStringXML, #{}, 0).
 
 share_table([], Map, _) -> Map;
+share_table([#xmlElement{content = []} | T], Map, Index) ->
+	NewMap = maps:put(Index, "", Map),
+	share_table(T, NewMap, Index + 1);
 share_table([#xmlElement{content = Content} | T], Map, Index) ->
 	[#xmlText{value = Value}|_] = Content,
 	NewMap = maps:put(Index, Value, Map),

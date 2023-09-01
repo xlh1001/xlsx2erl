@@ -43,10 +43,7 @@ make_file_name(Path, RecordName, erl) ->
 
 
 make_hrl(ExportKey, HrlPath, Sheet) ->
-	#excel_sheet{
-		name = NameStr, 
-		column = CloumnList
-	} = Sheet,
+	#excel_sheet{name = NameStr, column = CloumnList} = Sheet,
 	RecordName = record_name(NameStr),
 	Data = make_hrl_data(ExportKey, CloumnList, ""),
 	RecordDef = lists:concat(["-record(", RecordName, ", {", Data, "\n})."]),
@@ -56,24 +53,25 @@ make_hrl(ExportKey, HrlPath, Sheet) ->
 	ok.
 
 make_hrl_data(_ExportKey, [], Acc) -> Acc;
-make_hrl_data(ExportKey, [{_Cloumn, FieldMap} | CloumnList], Acc) -> 
-	NewAcc = 
-		case maps:get(ExportKey, FieldMap, ?EXPORT) of
-			?EXPORT ->
-				make_hrl_data_core(FieldMap, Acc);
-			_ ->
-				Acc
-		end,
+make_hrl_data(ExportKey, [{_Cloumn, FieldMap} | CloumnList], Acc) ->
+	IsExport = maps:get(ExportKey, FieldMap, ?EXPORT),
+	NewAcc = make_hrl_data_core(IsExport, FieldMap, Acc),
 	make_hrl_data(ExportKey, CloumnList, NewAcc).
 
 
-make_hrl_data_core(#{comment := Comment, name := Name, data_type := Type}, "") ->
+make_hrl_data_core(?EXPORT, FieldMap, "") ->
+	Str = make_hrl_data_helper(FieldMap),
+	lists:concat(["\n\t", Str]);
+make_hrl_data_core(?EXPORT, FieldMap, Acc) ->
+	Str = make_hrl_data_helper(FieldMap),
+	concat_acc(Acc, Str, "\n\t,");
+make_hrl_data_core(_, _Map, Acc) ->
+	Acc.
+
+make_hrl_data_helper(FieldMap) ->
+	#{comment := Comment, name := Name, data_type := Type} = FieldMap,
 	DefaultValue = default_value(Type),
-	lists:concat(["\n\t", Name, " = ", DefaultValue, " 	%% ", Comment]);
-make_hrl_data_core(#{comment := Comment, name := Name, data_type := Type}, Acc) ->
-	DefaultValue = default_value(Type),
-	Data = lists:concat([Name, " = ", DefaultValue, " 	%% ", Comment]),
-	concat_acc(Acc, Data, "\n\t,").
+	lists:concat([Name, " = ", DefaultValue, " 	%% ", Comment]).
 
 
 default_value(int) -> "0";
@@ -83,8 +81,7 @@ default_value(string) -> "\"\"".
 
 make_erl(BeginRow, FunKey, ErlPath, FileBaseName, Sheet) ->
 	#excel_sheet{
-		name = NameStr, content = ContentMap, 
-		column = CloumnList, fun_map = FuncMap
+		name = NameStr, content = ContentMap, column = CloumnList, fun_map = FuncMap
 	} = Sheet,
 	RecordName = record_name(NameStr),
 	FunList = maps:get(FunKey, FuncMap, []),
@@ -119,6 +116,38 @@ export_fun([#excel_fun{fun_name = FunName, args = Arity} | FuncList], Acc) ->
 	export_fun(FuncList, NewAcc).
 
 
+make_defate_fun(Func, BeginRow, ContentMap, RecordName) ->
+	#excel_fun{fun_name = FunName, args = Arity, values = Values} = Func,
+	Fun = fun
+		(Row, Cells, Acc) when Row >= BeginRow ->
+			ArgsData = make_fun_args(Arity, Cells, ""),
+			ValueData = make_fun_value(FunName, Values, Cells, ""),
+			concat_fun(FunName, Acc, ArgsData, RecordName, ValueData);
+		(_Row, _Cells, Acc) -> Acc
+	end,
+	FunData = maps:fold(Fun, "\n\n", ContentMap),
+	Default = get_defate_fun(FunName, ArgsPos),
+	lists:concat([FunData, Default]).
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 make_fun(_BeginRow, _ContentMap, _CloumnList, _RecordName, [], Acc) -> Acc;
 make_fun(BeginRow, ContentMap, CloumnList, RecordName, [Func | FuncList], Acc) ->
 	TmpData = make_fun_data(BeginRow, ContentMap, CloumnList, RecordName, Func),
@@ -128,7 +157,7 @@ make_fun_data(BeginRow, ContentMap, CloumnList, RecordName, Func) ->
 	#excel_fun{fun_name = FunName, args = Arity, values = Values} = Func,
 	ArgsPos = transform_args(CloumnList, Arity, []),
 	ValuePos = transform_args(CloumnList, Values, []),
-	xlsx2erl:info("========= Func:~p~nArgsPos:~p~nValuePos:~p~n", [Func, ArgsPos, ValuePos]),
+	% xlsx2erl:info("========= Func:~p~nArgsPos:~p~nValuePos:~p~n", [Func, ArgsPos, ValuePos]),
 	Fun = fun
 		(Row, Cells, Acc) when Row >= BeginRow ->
 			ArgsData = make_fun_args(ArgsPos, Cells, ""),
@@ -156,13 +185,12 @@ make_defate_fun_args([{_, #{name := Name}} | ArgsPos], Acc) ->
 	make_defate_fun_args(ArgsPos, concat_acc(Acc, lists:concat(["_", Name]))).
 
 make_fun_args([], _Cells, Acc) -> Acc;
-make_fun_args([{Cloumn, #{data_type := DataType}} | ArgsPos], Cells, Acc) ->
+make_fun_args([{Cloumn, _Name, DataType} | ArgsPos], Cells, Acc) ->
 	Value = handle_value(DataType, lists:keyfind(Cloumn, #excel_cell.c, Cells)),
 	make_fun_args(ArgsPos, Cells, concat_acc(Acc, Value)).
 
 make_fun_value(_, [], _Cells, Acc) -> Acc;
-make_fun_value(?DEFAULT_EXPORT_FUN, [ExcellCloumn | ValuePos], Cells, Acc) ->
-	{Cloumn, #{data_type := DataType, name := Name}} = ExcellCloumn,
+make_fun_value(?DEFAULT_EXPORT_FUN, [{Cloumn, Name, DataType} | ValuePos], Cells, Acc) ->
 	Value = handle_value(DataType, lists:keyfind(Cloumn, #excel_cell.c, Cells)),
 	if
 		Value == none ->
@@ -186,10 +214,16 @@ concat_acc(Acc, Data, InsertStr) ->
 
 
 handle_value(_, false) -> none;
-handle_value(int, #excel_cell{v = Value}) -> 
+handle_value(int, #excel_cell{v = ""}) -> 
+	0; 
+handle_value(int, #excel_cell{v = Value}) ->  
 	list_to_integer(Value);
+handle_value(list, #excel_cell{v = ""}) -> 
+	"[]"; 
 handle_value(list, #excel_cell{v = Value}) -> 
 	io_lib:format("~w", [xlsx2erl_tool:string_to_term(Value)]);
+handle_value(string, #excel_cell{v = ""}) -> 
+	"";
 handle_value(string, #excel_cell{v = Value}) -> 
 	io_lib:format("<<~s/utf8>>", [binary_to_list(unicode:characters_to_binary(Value))]).
 

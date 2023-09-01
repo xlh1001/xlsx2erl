@@ -32,8 +32,6 @@ update_sheet(Sheet = #excel_sheet{content = ContentMap}, HeaderList, Mods) ->
 	NewMap = check_row(BeginRow, CloumnList, ContentMap),
 	Sheet#excel_sheet{column = CloumnList, content = NewMap, fun_map = FuncMap}.
 
-
-
 % -----------------------------------------------------------------------------
 
 make_column_field(_ContentMap, [{Row, data_begin, _}], Acc) -> {Row, Acc};
@@ -57,9 +55,9 @@ make_column_field(ContentMap, [{Row, Key, ValueType}|T], CloumnList) ->
 	make_column_field(ContentMap, T, NewCloumnList).
 
 
-handle_value(atom, [First|T] = Value) -> %% atom 只能是小写字符开头，由小写字母以及数字组成
+handle_value(atom, [First|T] = Value) -> %% atom 由小写字母开头，数字下划线小写字母组成
 	(First < 97 orelse First > 122) andalso throw({false, atom, filed_value_err}),
-	List = [H || H <- T, H < 48 orelse (H > 57 andalso H < 97) orelse  H > 122],
+	List = [H || H <- T, H < 48 orelse ((H > 57 andalso H < 95) orelse H == 96) orelse  H > 122],
 	List =/= [] andalso throw({false, atom, filed_value_err}),
 	erlang:list_to_atom(Value);
 handle_value(int, Value) -> %% 确保数据是数字
@@ -68,7 +66,7 @@ handle_value(int, Value) -> %% 确保数据是数字
 	erlang:list_to_integer(Value);
 handle_value(list, Value) -> % "[xxx]" => [xxx]
 	xlsx2erl_tool:string_to_term(Value);
-handle_value(_, Value) -> Value.
+handle_value(_, Value) -> [H || H <- Value, H > 31].
 
 
 make_column_field_core(false, Key, _ValueType, _Map) 
@@ -88,7 +86,7 @@ make_func([H | T], CloumnList, ContentMap, HeaderList, AccMap) ->
 	Cells = maps:get(Row, ContentMap),
 	Fun = fun(#excel_cell{v = Value}, Acc) ->
 		FunList = xlsx2erl_tool:string_to_term(Value),
-		Funs = make_func_core(FunList),
+		Funs = make_func_core(CloumnList, FunList),
 		Funs ++ Acc
 	end, 
 	List = lists:foldl(Fun, [], Cells),
@@ -97,26 +95,38 @@ make_func([H | T], CloumnList, ContentMap, HeaderList, AccMap) ->
 	NewMap = maps:put(FunKey, [DefaultFun | List], AccMap),
 	make_func(T, CloumnList, ContentMap, HeaderList, NewMap).
 
-make_func_core(List) when is_list(List) ->
+make_func_core(CloumnList, List) when is_list(List) ->
 	[make_func_core({TmpFunName, TmpArity, TmpReturn}) || {TmpFunName, TmpArity, TmpReturn} <- List];
 make_func_core({TmpFunName, TmpArity, TmpReturn}) ->
 	#excel_fun{
 		fun_name = TmpFunName, 
-		args = TmpArity, 
-		values = TmpReturn
+		args = transform_args(CloumnList, TmpArity, []), 
+		values = transform_args(CloumnList, TmpReturn, [])
 	}.
 
 default_fun(CloumnList, ExportKey) -> 
-	Fun = fun({_Cloumn, #{name := Name} = FieldMap}, {AccKey, Acc}) ->
+	Fun = fun({Cloumn, #{name := Name, data_type := DataType}}, {AccKey, Acc}) ->
 		% xlsx2erl:info("========= FieldMap:~p~n", [FieldMap]),
 		IsKey = maps:get(is_key, FieldMap, ?NOTKEY),
 		IsExport = maps:get(ExportKey, FieldMap, ?EXPORT),
-		NewAccKey = ?IF(IsKey == ?KEY, [Name | AccKey], AccKey),
-		NewAcc = ?IF(IsExport == ?EXPORT, [Name | Acc], Acc),
+		NewAccKey = ?IF(IsKey == ?KEY, [{Cloumn, Name, DataType} | AccKey], AccKey),
+		NewAcc = ?IF(IsExport == ?EXPORT, [{Cloumn, Name, DataType} | Acc], Acc),
 		{NewAccKey, NewAcc}
 	end,
 	{Arity, Return} = lists:foldl(Fun, {[], []}, CloumnList),
 	#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN, args = Arity, values = Return}.
+
+transform_args(_CloumnList, [], Acc) -> Acc;
+transform_args(CloumnList, [Arg | T], Acc) ->
+	Cloumn = transform_args_core(CloumnList, Arg),
+	transform_args(CloumnList, T, [Cloumn | Acc]).
+
+transform_args_core([], _Arity) -> 
+	throw({false, Arity, fun_args_not_exist});
+transform_args_core([{Cloumn, #{name := Name, data_type := DataType}} = H | _], Arity) ->
+	{Cloumn, Name, DataType};
+transform_args_core([_ | CloumnList], Arity) ->
+	transform_args_core(CloumnList, Arity).
 
 % ---------------------------------------------------------------------
 
@@ -126,7 +136,8 @@ check_row(BeginRow, Cloumns, ContentMap) ->
 	],
 	% xlsx2erl:info("========= ContentMap:~p~n", [ContentMap]),
 	List = maps:to_list(ContentMap),
-	check_row_core(List, BeginRow, KeyCloumn, #{}).
+	%% 按行排序
+	check_row_core(lists:keysort(1, List), BeginRow, KeyCloumn, #{}).
 
 check_row_core([], _BeginRow, _KeyCloumn, AccMap) -> AccMap;
 check_row_core([{Row, Cells} | T], BeginRow, KeyCloumn, AccMap) when Row =< BeginRow ->
