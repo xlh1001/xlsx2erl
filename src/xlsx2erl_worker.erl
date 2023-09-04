@@ -119,6 +119,9 @@ do_handle_cast({work, ExcelName}, #{excel_path := ExcelPath} = State) ->
         {false, Arity, fun_args_not_exist} ->
             info("导出函数中所需字段~s不存在! ~n",[Arity]),
             xlsx2erl:fail(self(), ExcelName);
+        {false, {Name, FunName}, fun_miss_args} ->
+            info("导出函数~s中所需字段~s不存在! ~n",[FunName, Name]),
+            xlsx2erl:fail(self(), ExcelName);
         _Err ->
             info("导出失败 reason :~p ~n",[_Err]),
             xlsx2erl:fail(self(), ExcelName)

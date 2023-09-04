@@ -13,8 +13,6 @@
 
 -export([oprate/3 ]).
 
-%% return: list() | {false, Key, filed_value_err} |
-% 	{false, Key, key_filed_lost} | {false, Row, lost_key_cloumn} ->
 oprate(SheetList, HeaderList, Mods) ->
 	case catch oprate(SheetList, HeaderList, Mods, []) of
         {false, Key, Code} -> {false, Key, Code};
@@ -96,8 +94,8 @@ make_func([H | T], CloumnList, ContentMap, HeaderList, AccMap) ->
 	make_func(T, CloumnList, ContentMap, HeaderList, NewMap).
 
 make_func_core(CloumnList, List) when is_list(List) ->
-	[make_func_core({TmpFunName, TmpArity, TmpReturn}) || {TmpFunName, TmpArity, TmpReturn} <- List];
-make_func_core({TmpFunName, TmpArity, TmpReturn}) ->
+	[make_func_core(CloumnList, {TmpFunName, TmpArity, TmpReturn}) || {TmpFunName, TmpArity, TmpReturn} <- List];
+make_func_core(CloumnList, {TmpFunName, TmpArity, TmpReturn}) ->
 	#excel_fun{
 		fun_name = TmpFunName, 
 		args = transform_args(CloumnList, TmpArity, []), 
@@ -105,7 +103,8 @@ make_func_core({TmpFunName, TmpArity, TmpReturn}) ->
 	}.
 
 default_fun(CloumnList, ExportKey) -> 
-	Fun = fun({Cloumn, #{name := Name, data_type := DataType}}, {AccKey, Acc}) ->
+	Fun = fun({Cloumn, FieldMap}, {AccKey, Acc}) ->
+		#{name := Name, data_type := DataType} = FieldMap,
 		% xlsx2erl:info("========= FieldMap:~p~n", [FieldMap]),
 		IsKey = maps:get(is_key, FieldMap, ?NOTKEY),
 		IsExport = maps:get(ExportKey, FieldMap, ?EXPORT),
@@ -114,16 +113,16 @@ default_fun(CloumnList, ExportKey) ->
 		{NewAccKey, NewAcc}
 	end,
 	{Arity, Return} = lists:foldl(Fun, {[], []}, CloumnList),
-	#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN, args = Arity, values = Return}.
+	#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN, args = lists:reverse(Arity), values = lists:reverse(Return)}.
 
-transform_args(_CloumnList, [], Acc) -> Acc;
+transform_args(_CloumnList, [], Acc) -> lists:reverse(Acc);
 transform_args(CloumnList, [Arg | T], Acc) ->
 	Cloumn = transform_args_core(CloumnList, Arg),
 	transform_args(CloumnList, T, [Cloumn | Acc]).
 
-transform_args_core([], _Arity) -> 
+transform_args_core([], Arity) -> 
 	throw({false, Arity, fun_args_not_exist});
-transform_args_core([{Cloumn, #{name := Name, data_type := DataType}} = H | _], Arity) ->
+transform_args_core([{Cloumn, #{name := Name, data_type := DataType}} | _], Name) ->
 	{Cloumn, Name, DataType};
 transform_args_core([_ | CloumnList], Arity) ->
 	transform_args_core(CloumnList, Arity).

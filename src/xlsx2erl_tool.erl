@@ -7,7 +7,7 @@
 %%%----------------------------------------------
 -module(xlsx2erl_tool).
 
--export([string_to_term/1, make_erl_file/2, make_excel/1, make_tag_menus/1, excel_name/2, change_path/1]).
+-export([string_to_term/1, make_erl_file/2, make_excel/1, make_tag_menus/1, excel_name/2, change_path/1, list_to_str/1]).
 
 -export([config_header/0, config_callback/0]).
 
@@ -95,3 +95,13 @@ get_config(Key, Default) ->
         {ok, Data} -> Data;
         _ -> Default
     end.
+
+list_to_str(List) ->
+    list_to_str(List, "").
+
+list_to_str([], Str) -> Str;
+list_to_str([H | T], "") ->
+    list_to_str(T, H);
+list_to_str([H | T], Str) ->
+    NewStr = lists:concat([Str, ", ", H]),
+    list_to_str(T, NewStr).

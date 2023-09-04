@@ -63,7 +63,7 @@ create_wxMenuBar(Frame, PathList) ->
 			{Id+1, NewAcc, NewMap}
 		end, {?MY_wxMenuId_UNKNOWNDIR, [], #{}}, PathList),
 	SettingMenuList = MenuList ++ [
-		{?MY_wxMenuId_XSLXDIR, "&设置excel目录"}, 
+		{?MY_wxMenuId_XSLXDIR, "&设置excel目录"}
 		% {?MY_wxMenuId_WORKERNUM, "&设置工作进程数量"}
 	],
 	create_wxMenu(MB, "&设置", SettingMenuList),
