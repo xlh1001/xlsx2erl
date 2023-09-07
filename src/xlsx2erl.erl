@@ -18,7 +18,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([success/2, fail/2, update_user_data/2, info/2]).
+-export([update_user_data/2, info/2, notify_wxFrame/1]).
 
 
 
@@ -27,10 +27,8 @@
 -define(WORKER_BUSY, 2). %% 繁忙
 
 -record(state, {
-    worker = []
-    ,undo_task = []
+    worker = undefined
     
-    ,excel = []
     ,excel_path = ""
     
     ,wx_frame = undefined
@@ -48,11 +46,6 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []). 
 
-success(WorkerPid, FileName) ->
-    gen_server:cast(?MODULE, {xlsx2erl_success, WorkerPid, FileName}).
-
-fail(WorkerPid, ExcelName) ->
-    gen_server:cast(?MODULE, {xlsx2erl_fail, WorkerPid, ExcelName}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -123,12 +116,11 @@ do_init([]) ->
 
     PathKeyList = get_all_path_key(xlsx2erl_tool:config_callback(), []),
     State = init_state(PathKeyList),
-    WorkerNum = user_data(worker_num, 15),
-    WorkerList = start_worker(0, WorkerNum, [State#state.excel_path, State#state.path_map], []),
-
-    WxFramPid = start_wx(State, WorkerNum),
-
-    NewState = State#state{worker = WorkerList, wx_frame = WxFramPid},
+    WxFramPid = start_wx(State),
+    {ok, Pid} = xlsx2erl_worker:start_link(xlsx2erl_worker, [State#state.excel_path, State#state.path_map]),
+    xlsx2erl_loader:start_link(State#state.excel_path),
+    
+    NewState = State#state{worker = Pid, wx_frame = WxFramPid},
     {ok, NewState}.
 
 
@@ -137,64 +129,27 @@ do_handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 
-do_handle_cast({xlsx2erl_success, WorkerPid, ExcelName}, State) ->
-    {noreply, handle_work_res(State, WorkerPid, ExcelName, success)};
-
-do_handle_cast({xlsx2erl_fail, WorkerPid, ExcelName}, State) ->
-    {noreply, handle_work_res(State, WorkerPid, ExcelName, fail)};
 
 do_handle_cast(Request, State) ->
     info("======  unhandle cast :~p~n",[Request]),
     {noreply, State}.
 
-do_handle_info({export, all}, State = #state{excel = ExcelList, worker = WorkerList}) ->
-    {NewWorkerList, UndoExcelList} = lists:foldl(
-        fun
-            ({Worker, ?WORKER_FREE}, {AccWorkerL, AccExcelList}) ->
-                [{_, ExcelName}|NewAccExcelL] = AccExcelList,
-                xlsx2erl_worker:work(Worker, ExcelName),
-                NewWorkerList = lists:keystore(Worker, 1, AccWorkerL, {Worker, ?WORKER_BUSY}),
-                {NewWorkerList, NewAccExcelL};
-            (_, Acc) -> Acc
-        end, {WorkerList, ExcelList}, WorkerList),
-    {noreply, State#state{worker = NewWorkerList, undo_task = [TmpExcelName || {_Id, TmpExcelName} <- UndoExcelList]}};
-
-do_handle_info({export, ExcelNameList}, State = #state{worker = WorkerList, undo_task = UndoTask}) ->
-    {ExcelNameList0, NewWorkerList} = divide_worker(ExcelNameList, WorkerList, []),
-    UndoTask0 = UndoTask -- ExcelNameList0,
-    NewUndoTask = ExcelNameList0 ++ UndoTask0,
-    {noreply, State#state{worker = NewWorkerList, undo_task = NewUndoTask}};
+do_handle_info({export, Args}, State = #state{worker = WorkerPid}) ->
+    notify_worker(WorkerPid, {export, Args}),
+    {noreply, State};
 
 
 do_handle_info({update_path, Key, Path}, State) ->
-    #state{worker = WorkerList, path_map = PathMap} = State,
-    notify_worker(WorkerList, Key, Path),
+    #state{worker = WorkerPid, path_map = PathMap} = State,
+    notify_worker(WorkerPid, {update_path, Key, Path}),
     update_user_data(Key, Path),
     {noreply, State#state{path_map = maps:put(Key, Path, PathMap)}};
 
-do_handle_info({update_user_data, excel_path, NewValue}, State) ->
-    #state{worker = WorkerList, wx_frame = WxFramPid} = State,
-    {_, ExcelList} = xlsx2erl_tool:make_excel(NewValue),
-    notify_worker(WorkerList, excel_path, NewValue),
-    notify_wxFrame(WxFramPid, {update_excel, ExcelList}),
+do_handle_info({update_user_data, excel_path, NewValue}, State = #state{worker = WorkerPid}) ->
+    notify_worker(WorkerPid, {update_path, excel_path, NewValue}),
+    xlsx2erl_loader:change_excel_path(NewValue),
     update_user_data(excel_path, NewValue),
-    {noreply, State#state{excel_path = NewValue, excel = ExcelList}};
-do_handle_info({update_user_data, worker_num, NewValue}, State) ->
-    #state{excel_path = ExcelPath, worker = WorkerList, path_map = PathMap} = State,
-    Len = erlang:length(WorkerList),
-    NewLen = list_to_integer(NewValue),
-    NewWorkerList = 
-        if
-            NewLen > Len ->
-                AddWorkerList = start_worker(Len, NewLen, [ExcelPath, PathMap], []),
-                AddWorkerList ++ WorkerList;
-            true ->
-                {NewList, DelList} = lists:split(NewLen, WorkerList),
-                [Worker ! stop || {Worker, _} <- DelList],
-                NewList
-        end,
-    update_user_data(worker_num, NewLen),
-    {noreply, State#state{worker = NewWorkerList}};
+    {noreply, State#state{excel_path = NewValue}};
 
 do_handle_info({tags, AddTag, ExcelName}, State) ->
     #state{tags = Tags, excel_tags = TagMap} = State,
@@ -221,8 +176,8 @@ do_handle_info({del_tag, Tag}, State) ->
     update_user_data(excel_tags, NewMap),
     {noreply, State#state{tags = NewTags, excel_tags = NewMap}};
 
-do_handle_info(stop, State = #state{worker = WorkerList}) ->
-    notify_worker(WorkerList, stop),
+do_handle_info(stop, State = #state{worker = WorkerPid}) ->
+    notify_worker(WorkerPid, stop),
     {stop, normal, State};
 
 do_handle_info(Request, State) ->
@@ -233,21 +188,8 @@ do_terminate(_Reason, _State) ->
     dets:close(?DETS_XLSX2ERL),
     ok.
 
-do_work(WorkerPid, WorkerList, [ExcelName | T]) ->
-    xlsx2erl_worker:work(WorkerPid, ExcelName),
-    NewWorkerList = lists:keystore(WorkerPid, 1, WorkerList, {WorkerPid, ?WORKER_BUSY}),
-    {NewWorkerList, T}.
-
-handle_work_res(State = #state{undo_task = []}, WorkerPid, ExcelName, Flag) ->
-    #state{worker = WorkerList, wx_frame = WxFramPid} = State,
-    notify_wxFrame(WxFramPid, {export_res, ExcelName, Flag}),
-    NewWorkerList = lists:keystore(WorkerPid, 1, WorkerList, {WorkerPid, ?WORKER_FREE}),
-    State#state{worker = NewWorkerList};
-handle_work_res(State, WorkerPid, ExcelName, Flag) ->
-    #state{worker = WorkerList, undo_task = UndoTask, wx_frame = WxFramPid} = State,
-    notify_wxFrame(WxFramPid, {export_res, ExcelName, Flag}),
-    {NewWorkerList, NewUndoTask} = do_work(WorkerPid, WorkerList, UndoTask),
-    State#state{worker = NewWorkerList, undo_task = NewUndoTask}.
+% do_work(WorkerPid, WorkerList, [ExcelName | T]) ->
+%     xlsx2erl_worker:work(WorkerPid, ExcelName),
 
 load_user_data(Path) ->
     File = lists:concat([Path, "/xlsx2erl.dets"]),
@@ -270,20 +212,18 @@ get_all_path_key([{_ExportKey, _, _CallBacMod, PathKeyList}|T], Acc) ->
 
 init_state(PathKeyList) ->
     ExcelPath = user_data(excel_path, ""),
-    {_, ExcelList} = xlsx2erl_tool:make_excel(ExcelPath),
     PathList = [{PathKey, user_data(PathKey, "")} || PathKey <- PathKeyList],
     
     Tags = user_data(tags, []),
     TagMap = user_data(excel_tags, #{}),
     #state{
-        excel = ExcelList
-        ,excel_path = user_data(excel_path, "")
+        excel_path = ExcelPath
         ,path_map = maps:from_list(PathList)
         ,tags = Tags
         ,excel_tags = TagMap
     }.
 
-start_wx(State, WorkerNum) ->
+start_wx(State) ->
     #state{
         excel_path = ExcelPath
         ,path_map = PathMap
@@ -294,34 +234,20 @@ start_wx(State, WorkerNum) ->
         {excel_path, ExcelPath}
         , {tags, Tags}
         , {path_map, PathMap}
-        , {worker_num, WorkerNum}
         , {tag_map, TagMap}
         , {server, self()}
     ],
     #wx_ref{state = WxFramPid} = xlsx2erl_wx:start_link(WxOption),
     WxFramPid.
 
-start_worker(Start, Start, _Args, Acc) -> Acc;
-start_worker(Start, WorkerNum, Args, Acc) ->
-    Name = erlang:list_to_atom(lists:concat(["xlsx2erl_worker_", WorkerNum])),
-    {ok, Pid} = xlsx2erl_worker:start_link(Name, Args),
-    start_worker(Start, WorkerNum - 1, Args, [{Pid, ?WORKER_FREE} | Acc]).
-
-divide_worker(ExcelNames, [], Acc) -> {ExcelNames, Acc};
-divide_worker([ExcelName | T], [{Worker, ?WORKER_FREE} | WorkerList], Acc) ->
-    xlsx2erl_worker:work(Worker, ExcelName),
-    divide_worker(T, WorkerList, [{Worker, ?WORKER_BUSY} | Acc]);
-divide_worker(ExcelNames, [H | WorkerList], Acc) ->
-    divide_worker(ExcelNames, WorkerList, [H | Acc]).
 
 info(Str, Args) ->
     notify_wxFrame(whereis(xlsx2erl_wx), {info, io_lib:format(Str, Args)}).
 
+notify_wxFrame(Msg) ->
+    notify_wxFrame(whereis(xlsx2erl_wx), Msg).
 notify_wxFrame(WxFramPid, Msg) ->
     WxFramPid ! Msg.
 
-notify_worker(WorkerList, Msg) ->
-    [Worker ! Msg || {Worker, _} <- WorkerList].
-
-notify_worker(WorkerList, Key, NewValue) ->
-    [Worker ! {update_path, Key, NewValue} || {Worker, _} <- WorkerList].
+notify_worker(Worker, Msg) ->
+    Worker ! Msg.

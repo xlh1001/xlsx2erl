@@ -29,13 +29,9 @@
     ,excel_path = ""
     ,tags = []
     ,path_map = #{}   %% Id => {Key, Path}
-    ,worker_num = 0
     ,server = undefined
     ,excel_tags = #{}   %% xx => [xxx.xlsx]
     ,extra = #{}
-    ,excel_list = []
-
-    
 }).
 
 start() ->
@@ -59,7 +55,6 @@ start_link(Debug) ->
 %         {excel_path, ExcelPath}
 %         , {tags, Tags}
 %         , {path_map, PathMap}
-%         , {worker_num, WorkerNum}
 %         , {tag_map, TagMap}
 %         , {server, self()}
 %     ],
@@ -75,7 +70,6 @@ init(Options) ->
         ,tag_map := TagMap
         ,server := Server
         ,path_map := PathMap
-        ,worker_num := WorkerNum
     } = OptionMap,
     % erlang:group_leader(whereis(user), self()),
     
@@ -86,14 +80,13 @@ init(Options) ->
     %% 底部状态栏
     _SB = wxFrame:createStatusBar(Frame, []),
 
-    {_, ExcelList} = xlsx2erl_tool:make_excel(ExcelPath),
     %% pathmap 格式转换成 Id => {Key, Path}
     NewOpMap = maps:put(path_map, NewPathMap, OptionMap),
     {ChoiceCtrl, ExcelCtrl, TipsCtrl, LogsCtrl} =
-            xlsx2erl_wx_tool:create_panel(Frame, NewOpMap, ExcelList),
+            xlsx2erl_wx_tool:create_panel(Frame, NewOpMap, []),
     
     wxFrame:show(Frame),
-
+    put(excel_list, []),
     PopupMenu = xlsx2erl_wx_tool:create_popupMenu(Tags),
 
     State = #state{
@@ -109,28 +102,25 @@ init(Options) ->
         ,tags = Tags
         ,excel_tags = TagMap
         ,path_map = NewPathMap
-        ,worker_num = WorkerNum
         ,server = Server
-        
-        ,excel_list = ExcelList
     },
     {Frame, State}.
 
 
 
 
-handle_info({export_res, ExcelName, Flag}, State) ->
-    format(State, xlsx2erl_wx_tool:log_str(ExcelName, Flag)),
-    {noreply, clear_log(State)};
-
 handle_info({info, LogStr}, State) ->
     format(State, LogStr),
     {noreply, clear_log(State)};
 
 %% Handled as in normal gen_server callbacks
-handle_info({update_excel, ExcelList}, State = #state{excel_ctrl = {ExcelParent, Sizer}, extra = ExtraMap}) ->
+handle_info(update_excel, State) ->
+    #state{excel_ctrl = {ExcelParent, Sizer}, extra = ExtraMap} = State,
+    ExcelList = xlsx2erl_loader:get_excel_list(),
+    % format(State, io_lib:format("update_excel ExcelList ~p~n",[ExcelList])),
+    put(excel_list, ExcelList),
     xlsx2erl_wx_tool:recreate_excel_choice(ExcelParent, Sizer, ExcelList),
-    {noreply, State#state{excel_list = ExcelList, extra = maps:remove(?EXTRA_MAP_KEY_EXCELIDS, ExtraMap)}};
+    {noreply, State#state{extra = maps:remove(?EXTRA_MAP_KEY_EXCELIDS, ExtraMap)}};
 
 handle_info({'EXIT',_, wx_deleted}, State) ->
     {noreply,State};
@@ -186,7 +176,8 @@ handle_event(#wx{id = ?MY_wxTextCtrl_SEARCH, event = #wxCommand{type = Type, cmd
                                         when Type == command_text_updated 
                                         orelse Type == command_text_enter ->
 
-    #state{excel_list = ExcelList, excel_ctrl = {ExcelParent, Sizer}} = State,
+    #state{excel_ctrl = {ExcelParent, Sizer}} = State,
+    ExcelList = get(excel_list),
     if
         SearchStr == [] ->
             NewExcelList = ExcelList;
@@ -202,11 +193,9 @@ handle_event(#wx{id = ?MY_wxTextCtrl_SEARCH, event = #wxCommand{type = Type, cmd
     {noreply, State};
 
 handle_event(#wx{id = ?BTN_ID_EXPORT_SELECT, event = #wxCommand{type = command_button_clicked}}, State) ->
-    #state{extra = ExtraMap, excel_list = ExcelList, server = Server} = State,
+    #state{extra = ExtraMap, server = Server} = State,
     SelectIds = maps:get(?EXTRA_MAP_KEY_EXCELIDS, ExtraMap, []),
-    ExcelNames = [Name || {Id, Name} <- ExcelList, lists:member(Id, SelectIds) == true],
-
-    notify_server(Server, {export, ExcelNames}),
+    notify_server(Server, {export, SelectIds}),
     {noreply, State};
 
 
@@ -215,7 +204,8 @@ handle_event(#wx{id = ?BTN_ID_EXPORT_ALL, event = #wxCommand{type = command_butt
     {noreply, State};
 
 handle_event(#wx{id = ?BTN_ID_CHOICE_CLEAR, event = #wxCommand{type = command_button_clicked}}, State) ->
-    #state{extra = ExtraMap, excel_ctrl = {ExcelParent, Sizer}, excel_list = ExcelList} = State,
+    #state{extra = ExtraMap, excel_ctrl = {ExcelParent, Sizer}} = State,
+    ExcelList = get(excel_list),
     xlsx2erl_wx_tool:recreate_excel_choice(ExcelParent, Sizer, ExcelList),
     {noreply, State#state{extra = maps:remove(?EXTRA_MAP_KEY_EXCELIDS, ExtraMap)}};
 
@@ -250,13 +240,10 @@ terminate(_Reason, _State = #state{frame = Frame, server = Server}) ->
 
 change_tips(State) ->
     #state{
-        excel_path = ExcelPath
-        ,path_map = PathMap
-        ,worker_num = WorkerNum
-        ,tips_ctrl = TipsCtrl
+        excel_path = ExcelPath, path_map = PathMap, tips_ctrl = TipsCtrl
     } = State,   
     wxTextCtrl:clear(TipsCtrl),
-    wxTextCtrl:appendText(TipsCtrl, xlsx2erl_wx_tool:tips_str(ExcelPath, PathMap, WorkerNum)),
+    wxTextCtrl:appendText(TipsCtrl, xlsx2erl_wx_tool:tips_str(ExcelPath, PathMap)),
     ok.
     
 
@@ -277,14 +264,6 @@ handle_menu_select_event(#wx{id = ?MY_wxMenuId_XSLXDIR}, State) ->
     NewState = State#state{excel_path = NewPath},
     change_tips(NewState),
     {noreply, NewState};
-handle_menu_select_event(#wx{id = ?MY_wxMenuId_WORKERNUM}, State) ->
-    #state{frame = Frame, worker_num = WorkerNum, server = Server} = State,
-    Dialog = wxTextEntryDialog:new(Frame, "输入工作进程数量", [{value, "15"}]),
-    NewWorkerNum = xlsx2erl_wx_tool:handle_dialog(wxTextEntryDialog, Dialog, fun wxTextEntryDialog:getValue/1, WorkerNum),
-    notify_server_update(Server, worker_num, NewWorkerNum, WorkerNum),
-    NewState = State#state{worker_num = NewWorkerNum},
-    change_tips(NewState),
-    {noreply, NewState};
 handle_menu_select_event(#wx{id = ?MY_wxMenuId_OPENFILE}, State) ->
     #state{excel_path = ExcelPath, extra = #{?EXTRA_MAP_KEY_EXCELNAME := ExcelName}} = State,
     ExcelName =/= false andalso os:cmd(io_lib:format("start excel \"~s/~ts\"",[ExcelPath, ExcelName])),
@@ -301,10 +280,8 @@ handle_menu_select_event(#wx{id = ?MY_wxMenuId_DELETE}, State) ->
     ok = file:delete(lists:concat([ExcelPath, "/", ExcelName])),
     {noreply, State};
 handle_menu_select_event(#wx{id = ?MY_wxMenuId_REFRESH}, State) ->
-    #state{excel_ctrl = {ExcelParent, Sizer}, excel_path = ExcelPath, extra = ExtraMap} = State,
-    {_, ExcelList} = xlsx2erl_tool:make_excel(ExcelPath),
-    xlsx2erl_wx_tool:recreate_excel_choice(ExcelParent, Sizer, ExcelList),
-    {noreply, State#state{excel_list = ExcelList, extra = maps:remove(?EXTRA_MAP_KEY_EXCELIDS, ExtraMap)}};
+    xlsx2erl_loader:refresh(),
+    {noreply, State};
 handle_menu_select_event(#wx{id = ?MY_wxMenuId_SVNUPDATE}, State = #state{excel_path = ExcelPath}) ->
     os:cmd(lists:concat(["call svn update ", ExcelPath])),
     {noreply, State};
@@ -338,11 +315,8 @@ handle_menu_select_event(#wx{id = TagId, userData = {select_tag, StartId, ?MY_wx
 
 handle_menu_select_event(#wx{id = ?MY_wxMenuId_SETNEWTAG}, State) ->
     #state{
-        frame = Frame, 
-        tags = Tags, 
-        excel_tags = TagMap, 
-        server = Server, 
-        popupmenu = OldPopupMenu, 
+        frame = Frame, tags = Tags, excel_tags = TagMap, 
+        server = Server, popupmenu = OldPopupMenu, 
         extra = #{select_excel := ExcelName},
         choice_ctrl = {LBPanel, Choice}
     } = State,

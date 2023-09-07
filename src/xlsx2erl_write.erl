@@ -10,25 +10,25 @@
 -include("xlsx2erl.hrl").
 
 
--export([write_to_file/3]).
+-export([write_to_file/2]).
 
 
-write_to_file(StateMap, File, SheetList) ->
+write_to_file(StateMap, SheetList) ->
 	#{callback_mod := Mods} = StateMap,
 	{ExportKey, FunKey, _CallBacMod, PathKeyList} = lists:keyfind(?MODULE, 3, Mods),
 	CheckPath = lists:member(hrl_path, PathKeyList) andalso lists:member(erl_path, PathKeyList),
 	CheckPath == false andalso throw({false, ?MODULE, miss_path}),
-	[write_erl(ExportKey,FunKey, StateMap, File, Sheet) || Sheet <- SheetList],
+	[write_erl(ExportKey,FunKey, StateMap, Sheet) || Sheet <- SheetList],
 	ok.
 
-write_erl(ExportKey,FunKey, Map, File, Sheet) ->
+write_erl(ExportKey,FunKey, Map, Sheet) ->
 	#{
         hrl_path := HrlPath 
         ,erl_path := ErlPath
         ,header_def := HeaderList
+        ,excel_name := FileBaseName
     } = Map,
 	{BeginRow, _, _} = lists:keyfind(data_begin, 2, HeaderList),
-	FileBaseName = filename:basename(File),
 	make_hrl(ExportKey, HrlPath, Sheet),
 	make_erl(BeginRow, FunKey, ErlPath, FileBaseName, Sheet),
 	ok.
@@ -81,7 +81,7 @@ default_value(string) -> "\"\"".
 
 make_erl(BeginRow, FunKey, ErlPath, FileBaseName, Sheet) ->
 	#excel_sheet{
-		name = NameStr, content = ContentMap, fun_map = FuncMap
+		name = NameStr, content = ContentList, fun_map = FuncMap
 	} = Sheet,
 	RecordName = record_name(NameStr),
 	FunList = maps:get(FunKey, FuncMap, []),
@@ -89,8 +89,7 @@ make_erl(BeginRow, FunKey, ErlPath, FileBaseName, Sheet) ->
 	FileName = make_file_name(ErlPath, RecordName, erl),
 	WriteHeader = binary_to_list(unicode:characters_to_binary(Header)),
 	write_data(FileName, WriteHeader, [binary]),
-	FunData = make_fun(FunList, BeginRow, ContentMap, RecordName, ""),
-	write_data(FileName, FunData, [binary, append]),
+	make_fun(FunList, FileName, BeginRow, ContentList, RecordName),
 	ok.
 
 file_header(RecordName, FileBaseName, FuncMap, SheetName) ->
@@ -100,7 +99,7 @@ file_header(RecordName, FileBaseName, FuncMap, SheetName) ->
 	Mod = lists:concat([Comment, "-module(", RecordName, ")."]),
 	Include = lists:concat([Mod, "\n-include(\"", RecordName, ".hrl\").\n\n"]),
 	FunData = export_fun(FuncMap, ""),
-	lists:concat([Include, "\n-export([",FunData,"\n]).\n"]).
+	lists:concat([Include, "\n-export([",FunData,"\n]).\n\n"]).
 
 export_fun([], NewAcc) -> NewAcc;
 export_fun([#excel_fun{fun_name = FunName, args = Arity} | FuncList], "") ->
@@ -110,28 +109,28 @@ export_fun([#excel_fun{fun_name = FunName, args = Arity} | FuncList], Acc) ->
 	NewAcc = lists:concat([Acc, "\n\t ,", FunName, "/", erlang:length(Arity)]),
 	export_fun(FuncList, NewAcc).
 
-make_fun([], _Row, _Content, _Record, Acc) -> Acc;
-make_fun([#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN} = Func|T], Row, Content, Record, Acc) ->
-	FunData = make_defate_fun(Func, Row, Content, Record),
-	NewAcc = lists:concat([Acc, FunData]),
-	make_fun(T, Row, Content, Record, NewAcc);
-make_fun([Func|T], Row, Content, Record, Acc) ->
-	FunData = make_normal_fun(Func, Row, Content),
-	NewAcc = lists:concat([Acc, FunData]),
-	make_fun(T, Row, Content, Record, NewAcc).
+make_fun([], _FileName, _Row, _Content, _Record) -> ok;
+make_fun([#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN} = Func|T], FileName, Row, Content, Record) ->
+	make_defate_fun(FileName, Func, Row, Content, Record),
+	make_fun(T, FileName, Row, Content, Record);
+make_fun([Func|T], FileName, Row, Content, Record) ->
+	make_normal_fun(FileName, Func, Row, Content),
+	make_fun(T, FileName, Row, Content, Record).
 
-make_defate_fun(Func, BeginRow, ContentMap, RecordName) ->
+make_defate_fun(FileName, Func, BeginRow, ContentList, RecordName) ->
 	#excel_fun{fun_name = FunName, args = Arity, values = Values} = Func,
 	Fun = fun
-		(Row, Cells, Acc) when Row >= BeginRow ->
+		({Row, Cells}) when Row >= BeginRow ->
 			ArgsData = make_defalt_fun_args(Arity, Cells, ""),
 			ValueData = make_defalt_fun_value(Values, Cells, ""),
-			concat_fun(FunName, Acc, ArgsData, RecordName, ValueData);
-		(_Row, _Cells, Acc) -> Acc
+			Str = concat_fun(FunName, ArgsData, RecordName, ValueData),
+			write_data(FileName, Str, [binary, append]);
+		(_) -> skip
 	end,
-	FunData = maps:fold(Fun, "\n\n", ContentMap),
-	Default = get_defate_fun(FunName, Arity, "false."),
-	lists:concat([FunData, Default]).
+	lists:foreach(Fun, ContentList),
+	Default = get_defate_fun(FunName, Arity, "false.\n\n"),
+	write_data(FileName, Default, [binary, append]),
+	ok.
 	
 make_defalt_fun_args([], _Cells, Acc) -> Acc;
 make_defalt_fun_args([{Cloumn, _Name, DataType} | ArgsPos], Cells, Acc) ->
@@ -149,27 +148,29 @@ make_defalt_fun_value([{Cloumn, Name, DataType} | ValuePos], Cells, Acc) ->
 			make_defalt_fun_value(ValuePos, Cells, concat_acc(Acc, Data))
 	end.
 
-make_normal_fun(Func, BeginRow, ContentMap) ->
+make_normal_fun(FileName, Func, BeginRow, ContentList) ->
 	#excel_fun{fun_name = FunName, args = Arity, values = Values} = Func,
 	% xlsx2erl:info("========= Func:~p~n", [Func]),
 	Fun = fun
-		(Row, Cells, Acc) when Row >= BeginRow ->
+		({Row, Cells}, Acc) when Row >= BeginRow ->
 			OutArgs = make_fun_args(Arity, FunName, Cells, []),
-			List = maps:get(OutArgs, Acc, []),
+			List = proplists:get_value(OutArgs, Acc, []),
 			OutValues = make_normal_fun_core(Values, Cells, List, []),
-			maps:put(OutArgs, OutValues, Acc);
-		(_Row, _Cells, Acc) -> Acc
+			lists:keystore(OutArgs, 1, Acc, {OutArgs, OutValues});
+		(_, Acc) -> Acc
 	end,
-	FunDataMap = maps:fold(Fun, #{}, ContentMap),
+	FunDataList = lists:foldl(Fun, [], ContentList),
 	
-	Fun2 = fun(TmpArgs, TmpValues, Acc) ->
+	Fun2 = fun({TmpArgs, TmpValues}) ->
 		ArgStr = xlsx2erl_tool:list_to_str(TmpArgs),
 		ValStr = xlsx2erl_tool:list_to_str(TmpValues),
-		concat_fun(FunName, Acc, ArgStr, ValStr)
+		Str = concat_fun(FunName, ArgStr, ValStr),
+		write_data(FileName, Str, [binary, append])
 	end,
-	FunData = maps:fold(Fun2, "\n\n", FunDataMap),
-	Default = get_defate_fun(FunName, Arity, "[]."),
-	lists:concat([FunData, Default]).
+	lists:foreach(Fun2, FunDataList),
+	Default = get_defate_fun(FunName, Arity, "[].\n\n"),
+	write_data(FileName, Default, [binary, append]),
+	ok.
 
 
 make_fun_args([], _FunName, _Cells, Acc) -> 
@@ -194,14 +195,14 @@ make_normal_fun_core([{Cloumn, _Name, DataType} | ValuePos], Cells, List, Acc) -
 	end.
 
 %% 没有参数的函数就不需要默认匹配选项了
-concat_fun(FunName, Acc, "", ValueData) ->
-	lists:concat([Acc, "\n", FunName, "() -> [", ValueData, "]."]);
-concat_fun(FunName, Acc, ArgsData, ValueData) ->
-	lists:concat([Acc, "\n", FunName, "(", ArgsData, ") -> [", ValueData, "];"]).
+concat_fun(FunName, "", ValueData) ->
+	lists:concat(["\n", FunName, "() -> [", ValueData, "]."]);
+concat_fun(FunName, ArgsData, ValueData) ->
+	lists:concat(["\n", FunName, "(", ArgsData, ") -> [", ValueData, "];"]).
 
 
-concat_fun(FunName, Acc, ArgsData, RecordName, ValueData) ->
-	lists:concat([Acc, "\n", FunName, "(", ArgsData, ") -> #", RecordName, "{", ValueData, "}; "]).
+concat_fun(FunName, ArgsData, RecordName, ValueData) ->
+	lists:concat(["\n", FunName, "(", ArgsData, ") -> #", RecordName, "{", ValueData, "}; "]).
 
 get_defate_fun(_FunName, [], _Default) -> "\n";
 get_defate_fun(FunName, ArgsPos, Default) ->

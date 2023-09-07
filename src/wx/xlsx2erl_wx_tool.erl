@@ -11,7 +11,7 @@
 
 -export([create_popupMenu/1, create_wxMenuBar/2, create_panel/3, handle_dialog/4]).
 
--export([tips_str/3, format_wxTextCtrl/2, recreate_excel_choice/3, refresh_choice/3, log_str/2]).
+-export([tips_str/2, format_wxTextCtrl/2, recreate_excel_choice/3, refresh_choice/3, log_str/2]).
 
 % -----------------------------------------------------------------
 
@@ -64,7 +64,6 @@ create_wxMenuBar(Frame, PathList) ->
 		end, {?MY_wxMenuId_UNKNOWNDIR, [], #{}}, PathList),
 	SettingMenuList = MenuList ++ [
 		{?MY_wxMenuId_XSLXDIR, "&设置excel目录"}
-		% {?MY_wxMenuId_WORKERNUM, "&设置工作进程数量"}
 	],
 	create_wxMenu(MB, "&设置", SettingMenuList),
 	create_wxMenu(MB, "&文件", [{?wxID_EXIT, "&退出"}]),
@@ -132,12 +131,7 @@ create_left_panel(LeftSplitter, TagChoices, ExcelList) ->
     {LBPanel, List}.
 
 %% 右边界面添加2个显示文字的窗口
-create_right_panel(RightSplitter, OptionMap) ->
-	#{
-        excel_path := ExcelPath
-        ,path_map := PathMap
-        ,worker_num := WorkerNum
-    } = OptionMap,
+create_right_panel(RightSplitter, #{excel_path := ExcelPath, path_map := PathMap}) ->
 	%% 创建一个文字控件（显示、编辑文字）
     AddEvent = fun(Parent, Str) ->
 	    EventText = wxTextCtrl:new(Parent, ?wxID_ANY,  [{style, ?wxTE_DONTWRAP bor ?wxTE_MULTILINE bor ?wxTE_READONLY}]),
@@ -146,10 +140,10 @@ create_right_panel(RightSplitter, OptionMap) ->
 	end,
 
 	%% 创建一个tips窗口
-	StrTips = tips_str(ExcelPath, PathMap, WorkerNum),
+	StrTips = tips_str(ExcelPath, PathMap),
     {EvPanel, [TipsCtrl],_} = create_subwindow(RightSplitter, "tips", [{AddEvent, StrTips}]),
     
-    {LogPanel, [LogEvCtrl],_} = create_subwindow(RightSplitter, "log", [{AddEvent, "welcome"}]),
+    {LogPanel, [LogEvCtrl],_} = create_subwindow(RightSplitter, "log", [{AddEvent, ""}]),
     %% {sashPosition, Value} Value值是正的则表示指定上方的窗口（EvPanel）大小，值为负数则指定的是下窗口的大小
     wxSplitterWindow:splitHorizontally(RightSplitter, EvPanel, LogPanel, [{sashPosition, 150}]),
     {TipsCtrl, LogEvCtrl}.
@@ -313,7 +307,7 @@ format_wxTextCtrl(LogCtrl, Str) ->
 	wxTextCtrl:appendText(LogCtrl, Str),
     ok.
 
-tips_str(ExcelPath, PathMap, WorkerNum) ->
+tips_str(ExcelPath, PathMap) ->
 	PathList = maps:to_list(PathMap),
 
 	Str = lists:foldl(fun({_Id, {Key, Path}}, Acc) ->
@@ -322,9 +316,7 @@ tips_str(ExcelPath, PathMap, WorkerNum) ->
 
 
 	lists:concat([
-		"当前配置\nexcel目录:", filename:absname(ExcelPath), 
-		Str,
-		"\n工作进程数量:", WorkerNum, "\n添加新的文件后选择一个excel文件右键刷新！"
+		"当前配置\nexcel目录:", filename:absname(ExcelPath), Str
 	]).
 
 log_str(ExcelName, success) ->

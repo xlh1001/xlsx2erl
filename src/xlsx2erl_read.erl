@@ -60,12 +60,14 @@ make_sheet([#excel_sheet{id = SheetId} = Sheet | T], ExcelData, SharedTable, She
 	KeyStr = lists:concat(["xl/worksheets/sheet", SheetId, ".xml"]),
 	[#xmlElement{content = RowsXML}] = transform_excel(KeyStr, "/worksheet/sheetData", ExcelData),
 	% file:write_file("../src/RowsXML.txt", io_lib:format("~p", [RowsXML]), [binary, append]),
-	Fun = fun(RowXML = #xmlElement{pos = Row}, Acc) ->
+	Fun = fun(RowXML = #xmlElement{attributes = Attrs}, Acc) ->
+		#xmlAttribute{value = RowStr} = lists:keyfind(r, #xmlAttribute.name, Attrs),
+		Row = erlang:list_to_integer(RowStr),
 		Cells = make_row(RowXML, SharedTable),
-		maps:put(Row, Cells, Acc)
+		[{Row, Cells} | Acc]
 	end,
-	RowsMap = lists:foldl(Fun, #{}, RowsXML),
-	make_sheet(T, ExcelData, SharedTable, [Sheet#excel_sheet{content = RowsMap}|SheetList]).
+	List = lists:foldl(Fun, [], RowsXML),
+	make_sheet(T, ExcelData, SharedTable, [Sheet#excel_sheet{content = lists:reverse(List)}|SheetList]).
 
 make_row(#xmlElement{content = CellsXML}, SharedTable) ->
  	Fun = fun

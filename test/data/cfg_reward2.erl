@@ -11,7 +11,6 @@
 ]).
 
 
-
 get(1) -> #cfg_reward2{lev = 1, award = [{1001,5},{1002,5}], tips = <<"这是字符串1"/utf8>>}; 
 get(2) -> #cfg_reward2{lev = 2, award = [{1001,6},{1002,6}], tips = <<"这是字符串2"/utf8>>}; 
 get(3) -> #cfg_reward2{lev = 3, award = [{1001,5},{1002,6}], tips = <<"这是字符串3"/utf8>>}; 
@@ -28,3 +27,4 @@ get(13) -> #cfg_reward2{lev = 13, award = [{1001,5},{1002,11}], tips = <<"这是
 get(14) -> #cfg_reward2{lev = 14, award = [{1001,6},{1002,12}], tips = <<"这是字符串14"/utf8>>}; 
 get(15) -> #cfg_reward2{lev = 15, award = [{1001,5},{1002,12}], tips = <<"这是字符串15"/utf8>>}; 
 get(_lev) -> false.
+

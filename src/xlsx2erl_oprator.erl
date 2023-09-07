@@ -24,34 +24,45 @@ oprate([Sheet = #excel_sheet{}|T], HeaderList, Mods, Acc) ->
 	NewSheet = update_sheet(Sheet, HeaderList, Mods),
 	oprate(T, HeaderList, Mods, [NewSheet|Acc]).
 
-update_sheet(Sheet = #excel_sheet{content = ContentMap}, HeaderList, Mods) ->
-	{BeginRow, CloumnList} = make_column_field(ContentMap, HeaderList, []),
-	FuncMap = make_func(Mods, CloumnList, ContentMap, HeaderList, #{}),
-	NewMap = check_row(BeginRow, CloumnList, ContentMap),
-	Sheet#excel_sheet{column = CloumnList, content = NewMap, fun_map = FuncMap}.
+update_sheet(Sheet = #excel_sheet{content = ContentList}, HeaderList, Mods) ->
+	{BeginRow, CloumnList, NewContentList} = make_column_field(ContentList, HeaderList, []),
+	FuncMap = make_func(Mods, CloumnList, NewContentList, HeaderList, #{}),
+	NewList = check_row(BeginRow, CloumnList, NewContentList),
+	% io:format("==========OldMap ~p~nNewMap:~p~n",[NewContentList, NewList]),
+	Sheet#excel_sheet{column = CloumnList, content = NewList, fun_map = FuncMap}.
 
 % -----------------------------------------------------------------------------
 
-make_column_field(_ContentMap, [{Row, data_begin, _}], Acc) -> {Row, Acc};
-make_column_field(ContentMap, [{Row, Key, ValueType}|T], []) ->
-	Cells = maps:get(Row, ContentMap),
+make_column_field(ContentList, [{Row, data_begin, _}], Acc) -> 
+	{Row, Acc, ContentList};
+make_column_field(ContentList, [{Row, Key, ValueType}|T], []) ->
+	{Cells, NewContentList} = get_cells(Row, ContentList),
 	Fun = fun
 		(#excel_cell{c = Cloumn, v = Value}, {Acc, Before}) when Cloumn == Before + 1 ->
 			{[{Cloumn, #{Key => handle_value(ValueType, Value)}}|Acc], Cloumn};
 		(_Cell, Acc) -> Acc
 	end, 
 	{CloumnList, _} = lists:foldl(Fun, {[], 0}, Cells),
-	make_column_field(ContentMap, T, CloumnList);
-make_column_field(ContentMap, [{Row, Key, ValueType}|T], CloumnList) ->
-	Cells = maps:get(Row, ContentMap),
+	make_column_field(NewContentList, T, CloumnList);
+make_column_field(ContentList, [{Row, Key, ValueType}|T], CloumnList) ->
+	{Cells, NewContentList} = get_cells(Row, ContentList),
 	Fun = fun({Cloumn, Map}, Acc) ->
 		FindRes = lists:keyfind(Cloumn, #excel_cell.c, Cells),
 		NewMap = make_column_field_core(FindRes, Key, ValueType, Map),
 		[{Cloumn, NewMap} | Acc]
 	end,
 	NewCloumnList = lists:foldl(Fun, [], CloumnList),
-	make_column_field(ContentMap, T, NewCloumnList).
+	make_column_field(NewContentList, T, NewCloumnList).
 
+get_cells(Row, ContentList) ->
+	case proplists:get_value(Row, ContentList, null) of
+		null -> 
+			Cells = [],
+			NewContentList = lists:keysort(1, [{Row, Cells}|ContentList]);
+		Cells ->
+			NewContentList = ContentList
+	end,
+	{Cells, NewContentList}.
 
 handle_value(atom, [First|T] = Value) -> %% atom 由小写字母开头，数字下划线小写字母组成
 	(First < 97 orelse First > 122) andalso throw({false, atom, filed_value_err}),
@@ -77,11 +88,11 @@ make_column_field_core(#excel_cell{v = Value}, Key, ValueType, Map) ->
 	maps:put(Key, handle_value(ValueType, Value), Map).
 
 % ---------------------------------------------------------------------
-make_func([], _CloumnList, _ContentMap, _HeaderList, AccMap) -> AccMap;
-make_func([H | T], CloumnList, ContentMap, HeaderList, AccMap) ->
+make_func([], _CloumnList, _ContentList, _HeaderList, AccMap) -> AccMap;
+make_func([H | T], CloumnList, ContentList, HeaderList, AccMap) ->
 	{ExportKey, FunKey, _CallBacMod, _PathList} = H,
 	{Row, _, _} = lists:keyfind(FunKey, 2, HeaderList),
-	Cells = maps:get(Row, ContentMap),
+	Cells = proplists:get_value(Row, ContentList, []),
 	Fun = fun(#excel_cell{v = Value}, Acc) ->
 		FunList = xlsx2erl_tool:string_to_term(Value),
 		Funs = make_func_core(CloumnList, FunList),
@@ -91,7 +102,7 @@ make_func([H | T], CloumnList, ContentMap, HeaderList, AccMap) ->
 	DefaultFun = default_fun(CloumnList, ExportKey),
 	% xlsx2erl:info("========= DefaultFun:~p~n", [DefaultFun]),
 	NewMap = maps:put(FunKey, [DefaultFun | List], AccMap),
-	make_func(T, CloumnList, ContentMap, HeaderList, NewMap).
+	make_func(T, CloumnList, ContentList, HeaderList, NewMap).
 
 make_func_core(CloumnList, List) when is_list(List) ->
 	[make_func_core(CloumnList, {TmpFunName, TmpArity, TmpReturn}) || {TmpFunName, TmpArity, TmpReturn} <- List];
@@ -129,22 +140,21 @@ transform_args_core([_ | CloumnList], Arity) ->
 
 % ---------------------------------------------------------------------
 
-check_row(BeginRow, Cloumns, ContentMap) ->
+check_row(BeginRow, Cloumns, ContentList) ->
 	KeyCloumn = [ 
 		Cloumn || {Cloumn, #{is_key := IsKey}} <- Cloumns, IsKey == 1
 	],
-	% xlsx2erl:info("========= ContentMap:~p~n", [ContentMap]),
-	List = maps:to_list(ContentMap),
+	% xlsx2erl:info("========= ContentList:~p~n", [ContentList]),
 	%% 按行排序
-	check_row_core(lists:keysort(1, List), BeginRow, KeyCloumn, #{}).
+	check_row_core(ContentList, BeginRow, KeyCloumn, []).
 
-check_row_core([], _BeginRow, _KeyCloumn, AccMap) -> AccMap;
-check_row_core([{Row, Cells} | T], BeginRow, KeyCloumn, AccMap) when Row =< BeginRow ->
-	check_row_core(T, BeginRow, KeyCloumn, maps:put(Row, Cells, AccMap));
-check_row_core([{Row, [#excel_cell{r = Row}|_] = Cells} | T], BeginRow, KeyCloumn, AccMap) ->
+check_row_core([], _BeginRow, _KeyCloumn, Acc) -> lists:keysort(1, Acc);
+check_row_core([{Row, Cells} | T], BeginRow, KeyCloumn, Acc) when Row =< BeginRow ->
+	check_row_core(T, BeginRow, KeyCloumn, [{Row, Cells}|Acc]);
+check_row_core([{Row, [#excel_cell{r = Row}|_] = Cells} | T], BeginRow, KeyCloumn, Acc) ->
 	CheckRes = check_cloumn_exists(KeyCloumn, Cells),
 	CheckRes ==	false andalso throw({false, Row, lost_key_cloumn}),
-	check_row_core(T, BeginRow, KeyCloumn, maps:put(Row, Cells, AccMap));
+	check_row_core(T, BeginRow, KeyCloumn, [{Row, Cells}|Acc]);
 %% 空行标志数据读取结束
 check_row_core([_ | _T], _BeginRow, _KeyCloumn, AccMap) -> 
 	AccMap.

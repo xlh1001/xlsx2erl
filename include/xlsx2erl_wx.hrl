@@ -4,7 +4,7 @@
 -define(MY_wxMenuId_UNKNOWNDIR, 450).
 % -define(MY_wxMenuId_ERLDIR, 	502).
 -define(MY_wxMenuId_XSLXDIR, 	503).
--define(MY_wxMenuId_WORKERNUM, 	504).
+% -define(MY_wxMenuId_WORKERNUM, 	504).
 -define(MY_wxMenuId_OPENFILE, 	505).
 -define(MY_wxMenuId_EXPORT, 	506).
 -define(MY_wxMenuId_DELETE, 	507).
