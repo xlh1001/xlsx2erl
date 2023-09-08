@@ -12,15 +12,34 @@
 -include("xlsx2erl.hrl").
 
 %% API
--export([start_link/2, do_oprate/2]).
+-export([start_link/1, start_link/2, do_oprate/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+-export([
+    do_init/1,
+    do_handle_call/3,
+    do_handle_cast/2,
+    do_handle_info/2,
+    do_terminate/2
+]).
+
+-define(CATCH_ERROR, 
+    try
+        erlang:apply(?MODULE, Fun, Args)
+    catch
+        Type:Reason:StackTrace ->
+            format_error(Fun, Request, Type, Reason, StackTrace),
+            do_catch_error(Fun, Reason, State)
+    end).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+start_link(Args) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, Args, []). 
 
 start_link(Name, Args) ->
     gen_server:start_link({local, Name}, ?MODULE, Args, []). 
@@ -31,54 +50,56 @@ cancel_export(SheetId) ->
 %%% gen_server callbacks
 %%%===================================================================
 
+
 %% @private
 %% @doc Initializes the server
-init(Args) ->
-    try
-        do_init(Args)
-    catch
-        Type : Reason : StackTrace ->
-            io:format("init: ~w, error: ~w, reason: ~w, stacktrace: ~p~n", [Args, Type, Reason, StackTrace]),
-            {stop, Reason}
-    end.
+init(TmpArgs) ->
+    catch_error(do_init, [TmpArgs]).
 
 %% @private
 %% @doc Handling call messages
 handle_call(Request, From, State) ->
-    try
-        do_handle_call(Request, From, State)
-    catch
-        Type:Reason:StackTrace ->
-            io:format("handle_call:~p, error:~p, reason:~p, stacktrace:~p", [Request, Type, Reason, StackTrace]),
-            {reply, {false, 1}, State}
-    end.
+    catch_error(do_handle_call, [Request, From, State]).
 
 %% @private
 %% @doc Handling cast messages
 handle_cast(Request, State) ->
-    try
-        do_handle_cast(Request, State)
-    catch
-        Type:Reason:StackTrace ->
-            io:format("handle_cast:~p, error:~p, reason:~p, stacktrace:~p~n", [Request, Type, Reason, StackTrace]),
-            {noreply, State}
-    end.
-
+    catch_error(do_handle_cast, [Request, State]).
 
 %% @private
 %% @doc Handling all non call/cast messages
-handle_info(Info, State) ->
-    try
-        do_handle_info(Info, State)
-    catch
-        Type:Reason:StackTrace ->
-            io:format("handle_info:~p, error:~p, reason:~p, stacktrace:~p~n", [Info, Type, Reason, StackTrace]),
-            {noreply, State}
-    end.
+handle_info(Request, State) ->
+    catch_error(do_handle_info, [Request, State]).
 
 %% @private
 terminate(Reason, State) ->
-    do_terminate(Reason, State).
+    catch_error(do_terminate, [Reason, State]).
+
+catch_error(Fun, Args = [_]) ->
+    Request = null, State = null,
+    ?CATCH_ERROR;
+catch_error(Fun, Args = [Request, State]) ->
+    ?CATCH_ERROR;
+catch_error(Fun, Args = [Request, _From, State]) ->
+    ?CATCH_ERROR.
+
+do_catch_error(do_terminate, _Reason, _State) -> 
+    ok;
+do_catch_error(do_handle_call, _Reason, State) -> 
+    {reply, error, State};
+do_catch_error(do_init, Reason, _State) -> 
+    {stop, Reason};
+do_catch_error(_, _Reason, State) -> 
+    {noreply, State}.
+
+format_error(do_terminate, _, Type, Reason, StackTrace) ->
+    info("~w error type:~w, reason:~w ~n, stacktrace: ~w~n", 
+        [do_terminate, Type, Reason, StackTrace]),
+    ok;
+format_error(Fun, Request, Type, Reason, StackTrace) ->
+    info("~w error type:~w, reason:~w Request:~w~n, stacktrace: ~w~n", 
+        [Fun, Type, Reason, Request, StackTrace]),
+    ok.
 
 %% @private
 code_change(_OldVsn, State, _Extra) ->
@@ -88,16 +109,21 @@ code_change(_OldVsn, State, _Extra) ->
 do_init([ExcelPath, PathMap]) ->
     HeaderList = xlsx2erl_tool:config_header(),
     Mods = xlsx2erl_tool:config_callback(),
-    ExcelMap = maps:put(excel_path, ExcelPath, PathMap),
-    HeaderMap = maps:put(header_def, lists:keysort(1, HeaderList), ExcelMap),
-    ModMap = maps:put(callback_mod, Mods, HeaderMap),
-    {ok, maps:put(export_sheets, [], ModMap)}.
+    Map = #{
+        excel_path => ExcelPath,
+        header_def => HeaderList,
+        callback_mod => Mods,
+        export_sheets => []
+    },
+    State = maps:merge(PathMap, Map),
+    {ok, State}.
 
 do_handle_call(_Request, _From, State) ->
     info("======  unhandle call :~p~n",[_Request]),
     {reply, ok, State}.
 
-do_handle_cast({cancel_export, SheetId}, State = #{export_sheets := SheetIds}) ->
+do_handle_cast({cancel_export, SheetId}, State) ->
+    SheetIds = maps:get(export_sheets, State, []),
     NewSheetIds = lists:delete(SheetId, SheetIds),
     {noreply, maps:put(export_sheets, NewSheetIds, State)};
 
@@ -134,71 +160,79 @@ do_terminate(Reason, _State) ->
 do_work([], _State, SheetIds) -> SheetIds;
 do_work([#ets_sheet{id = SheetId, sheet = Sheet} | T], State, SheetIds) ->
     spawn(fun() -> 
-        ExcelName = xlsx2erl_loader:get_excel_name(SheetId),
-        SheetName = Sheet#excel_sheet.name,
-        try
-            Time1 = erlang:system_time(millisecond),
-            #{callback_mod := Mods} = State,
-            write_to_file(Mods, maps:put(excel_name, ExcelName, State), [Sheet]),
-            Time2 = erlang:system_time(millisecond),
-            info("~ts配置中的子表【~s】导出成功，耗时【~p】ms~n",[ExcelName, SheetName, Time2 - Time1])
-        catch
-            throw : Reason : _StackTrace ->
-                handle_export_res(ExcelName, SheetName, Reason);
-            _Type : Reason : _StackTrace ->
-                info("~ts配置中的子表【~s】导出失败 :~p StackTrace:~p~n",[ExcelName, SheetName, Reason, _StackTrace])
-        after
-            cancel_export(SheetId)
-        end
+        do_work_core(SheetId, Sheet, State)
     end),
     do_work(T, State, [SheetId | lists:delete(SheetId, SheetIds)]).
 
+do_work_core(SheetId, Sheet, State) ->
+    ExcelName = xlsx2erl_loader:get_excel_name(SheetId),
+    SheetName = Sheet#excel_sheet.name,
+    try
+        Time1 = erlang:system_time(millisecond),
+        #{callback_mod := Mods} = State,
+        write_to_file(Mods, maps:put(excel_name, ExcelName, State), [Sheet]),
+        Time2 = erlang:system_time(millisecond),
+        Success = {true, Time2 - Time1},
+        handle_export_res(Success, ExcelName, SheetName)
+    catch
+        throw : Reason : _StackTrace ->
+            handle_export_res(Reason, ExcelName, SheetName);
+        _Type : Reason : StackTrace ->
+            Res = {false, {Reason, StackTrace}, server_error},
+            handle_export_res(Res, ExcelName, SheetName)
+    after
+        cancel_export(SheetId)
+    end.
+
 write_to_file([], _State, _NewList) -> ok;
-write_to_file([{_ExportKey, _FunKey, CallBacMod, _PathKeyList}|T], State, NewList) ->
+write_to_file([Record | T], State, NewList) ->
+    CallBacMod = xlsx2erl_tool:config_callback_mod(Record),
     ok = CallBacMod:write_to_file(State, NewList),
     write_to_file(T, State, NewList).
 
 info(Str, Args) ->
     xlsx2erl:info(Str, Args).
 
-handle_export_res(ExcelName, SheetName, Res) ->
-    case Res of
-        {false, Mod, miss_path} ->
-            info("~ts配置中的子表【~s】导出失败：路径配置缺失 ! Mod:~p~n",[ExcelName, SheetName, Mod]);
-        {false, atom, filed_value_err} ->
-            info("~ts配置中的子表【~s】导出失败：字段类型错误 ! atom 只能是小写字符开头，由小写字母以及数字组成 ~n",[ExcelName, SheetName]);
-        {false, Key, filed_value_err} ->
-            info("~ts配置中的子表【~s】导出失败：字段类型错误 ! 类型：~p ~n",[ExcelName, SheetName, Key]);
-        {false, Key, key_filed_lost} ->
-            info("~ts配置中的子表【~s】导出失败：关键字段~p缺失! ~n",[ExcelName, SheetName, Key]);
-        {false, Row, lost_key_cloumn} ->
-            info("~ts配置中的子表【~s】导出失败：第~p行主键缺失! ~n",[ExcelName, SheetName, Row]);
-        {false, Arity, fun_args_not_exist} ->
-            info("~ts配置中的子表【~s】导出失败：导出函数中所需字段~s不存在! ~n",[ExcelName, SheetName, Arity]);
-        {false, {Name, FunName}, fun_miss_args} ->
-            info("~ts配置中的子表【~s】导出失败：导出函数~s中所需字段~s不存在! ~n",[ExcelName, SheetName, FunName, Name]);
-        _Err ->
-            info("~ts配置中的子表【~s】导出失败：导出失败 reason :~p ~n",[ExcelName, SheetName, _Err])
-    end.
-
 do_oprate(Sheet, ExcelName) ->
     HeaderList = get_header(config_header),
     Mods = get_header(config_callback),
-    case xlsx2erl_oprator:oprate([Sheet], HeaderList, Mods) of
-        {ok, [NewSheet]} ->
-            NewSheet;
-        Res ->
-            SheetName = Sheet#excel_sheet.name,
-            handle_export_res(ExcelName, SheetName, Res),
-            false
-    end.
+    OprateRes = xlsx2erl_oprator:oprate([Sheet], HeaderList, Mods),
+    do_oprate(OprateRes, Sheet#excel_sheet.name, ExcelName).
+
+do_oprate({ok, [NewSheet]}, _SheetName, _ExcelName) -> 
+    NewSheet;
+do_oprate(OprateRes, SheetName, ExcelName) -> 
+    handle_export_res(OprateRes, ExcelName, SheetName).
 
 get_header(Fun) ->
-    case get(Fun) of
-        undefined ->
-            Value = xlsx2erl_tool:Fun(),
-            put(Fun, Value),
-            Value;
-        Value -> ok
-    end,
+    get_header_helper(get(Fun), Fun).
+
+get_header_helper(undefined, Fun) ->
+    Value = xlsx2erl_tool:Fun(),
+    put(Fun, Value),
+    Value;
+get_header_helper(Value, _) ->
     Value.
+
+
+handle_export_res({false, atom, filed_value_err}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】字段类型错误 ! atom 由小写字母开头，数字、下划线、小写字母组成 ~n",[ExcelName, SheetName]);
+handle_export_res({false, Key, filed_value_err}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】字段类型错误 ! 类型：~p ~n",[ExcelName, SheetName, Key]);
+handle_export_res({false, Key, key_filed_lost}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】关键字段~p缺失! ~n",[ExcelName, SheetName, Key]);
+handle_export_res({false, Row, lost_key_cloumn}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】第~p行主键缺失! ~n",[ExcelName, SheetName, Row]);
+handle_export_res({false, Arity, fun_args_not_exist}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】导出函数中所需字段~s不存在! ~n",[ExcelName, SheetName, Arity]);
+handle_export_res({false, Mod, miss_path}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】导出失败：路径配置缺失 ! Mod:~p~n",[ExcelName, SheetName, Mod]);
+handle_export_res({false, {Name, FunName}, fun_miss_args}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】导出失败：导出函数~s中所需字段~s不存在! ~n",[ExcelName, SheetName, FunName, Name]);
+handle_export_res({false, {Reason, StackTrace}, server_error}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】导出失败：~p~n StackTrace:~w~n",[ExcelName, SheetName, Reason, StackTrace]);
+handle_export_res({true, Time}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】导出成功，耗时【~p】ms~n",[ExcelName, SheetName, Time]);
+handle_export_res(_Err, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】错误 reason :~w ~n",[ExcelName, SheetName, _Err]).
+

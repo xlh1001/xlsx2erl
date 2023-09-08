@@ -27,6 +27,14 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+-export([
+    do_init/1,
+    do_handle_call/3,
+    do_handle_cast/2,
+    do_handle_info/2,
+    do_terminate/2
+]).
+
 -record(state, {
 	max_id = 1
 	, excel_path = ""
@@ -36,6 +44,14 @@
 	, reload_flag = 0
 }).
 
+-define(CATCH_ERROR, 
+    try
+        erlang:apply(?MODULE, Fun, Args)
+    catch
+        Type:Reason:StackTrace ->
+            format_error(Fun, Request, Type, Reason, StackTrace),
+            do_catch_error(Fun, Reason, State)
+    end).
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -55,58 +71,53 @@ refresh() ->
 
 %% @private
 %% @doc Initializes the server
-init(Args) ->
-    try
-        do_init(Args)
-    catch
-        Type : Reason : StackTrace ->
-            io:format("init: ~w, error: ~w, reason: ~w, stacktrace: ~p~n", [Args, Type, Reason, StackTrace]),
-            {stop, Reason}
-    end.
+init(TmpArgs) ->
+    catch_error(do_init, [TmpArgs]).
 
 %% @private
 %% @doc Handling call messages
 handle_call(Request, From, State) ->
-    try
-        do_handle_call(Request, From, State)
-    catch
-        Type:Reason:StackTrace ->
-            io:format("handle_call:~p, error:~p, reason:~p, stacktrace:~p", [Request, Type, Reason, StackTrace]),
-            {reply, {false, 1}, State}
-    end.
+    catch_error(do_handle_call, [Request, From, State]).
 
 %% @private
 %% @doc Handling cast messages
 handle_cast(Request, State) ->
-    try
-        do_handle_cast(Request, State)
-    catch
-        Type:Reason:StackTrace ->
-            io:format("handle_cast:~p, error:~p, reason:~p, stacktrace:~p~n", [Request, Type, Reason, StackTrace]),
-            {noreply, State}
-    end.
-
+    catch_error(do_handle_cast, [Request, State]).
 
 %% @private
 %% @doc Handling all non call/cast messages
-handle_info(Info, State) ->
-    try
-        do_handle_info(Info, State)
-    catch
-        Type:Reason:StackTrace ->
-            io:format("handle_info:~p, error:~p, reason:~p, stacktrace:~p~n", [Info, Type, Reason, StackTrace]),
-            {noreply, State}
-    end.
+handle_info(Request, State) ->
+    catch_error(do_handle_info, [Request, State]).
 
 %% @private
 terminate(Reason, State) ->
-    try
-        do_terminate(Reason, State)
-    catch
-        Type : Reason:StackTrace ->
-            io:format("terminate: ~w, error: ~w, reason: ~w, stacktrace: ~w", [Reason, Type, Reason, StackTrace]),
-            ok
-    end.
+    catch_error(do_terminate, [Reason, State]).
+
+catch_error(Fun, Args = [_]) ->
+    Request = null, State = null,
+    ?CATCH_ERROR;
+catch_error(Fun, Args = [Request, State]) ->
+    ?CATCH_ERROR;
+catch_error(Fun, Args = [Request, _From, State]) ->
+    ?CATCH_ERROR.
+
+do_catch_error(do_terminate, _Reason, _State) -> 
+    ok;
+do_catch_error(do_handle_call, _Reason, State) -> 
+    {reply, error, State};
+do_catch_error(do_init, Reason, _State) -> 
+    {stop, Reason};
+do_catch_error(_, _Reason, State) -> 
+    {noreply, State}.
+
+format_error(do_terminate, _, Type, Reason, StackTrace) ->
+    io:format("~w error type:~w, reason:~w ~n, stacktrace: ~w~n", 
+        [do_terminate, Type, Reason, StackTrace]),
+    ok;
+format_error(Fun, Request, Type, Reason, StackTrace) ->
+    io:format("~w error type:~w, reason:~w Request:~w~n, stacktrace: ~w~n", 
+        [Fun, Type, Reason, Request, StackTrace]),
+    ok.
 
 %% @private
 code_change(_OldVsn, State, _Extra) ->

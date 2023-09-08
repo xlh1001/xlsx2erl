@@ -65,17 +65,19 @@ get_cells(Row, ContentList) ->
 	{Cells, NewContentList}.
 
 handle_value(atom, [First|T] = Value) -> %% atom 由小写字母开头，数字下划线小写字母组成
-	(First < 97 orelse First > 122) andalso throw({false, atom, filed_value_err}),
-	List = [H || H <- T, H < 48 orelse ((H > 57 andalso H < 95) orelse H == 96) orelse  H > 122],
+	(First < $a orelse First > $z) andalso throw({false, atom, filed_value_err}),
+	List = [H || H <- T, H < $0 orelse ((H > $9 andalso H < $_ ) orelse H == $` ) orelse  H > $z],
 	List =/= [] andalso throw({false, atom, filed_value_err}),
 	erlang:list_to_atom(Value);
 handle_value(int, Value) -> %% 确保数据是数字
-	List = [H || H <- Value, H < 48 orelse H > 57],
+	List = [H || H <- Value, H < $0 orelse H > $9],
 	List =/= [] andalso throw({false, int, filed_value_err}),
 	erlang:list_to_integer(Value);
 handle_value(list, Value) -> % "[xxx]" => [xxx]
 	xlsx2erl_tool:string_to_term(Value);
-handle_value(_, Value) -> [H || H <- Value, H > 31].
+handle_value(_, Value) -> 
+	%% ascii码表中小于31的都是一些奇奇怪怪的字符，直接剔除
+	[H || H <- Value, H > 31].
 
 
 make_column_field_core(false, Key, _ValueType, _Map) 
@@ -90,7 +92,7 @@ make_column_field_core(#excel_cell{v = Value}, Key, ValueType, Map) ->
 % ---------------------------------------------------------------------
 make_func([], _CloumnList, _ContentList, _HeaderList, AccMap) -> AccMap;
 make_func([H | T], CloumnList, ContentList, HeaderList, AccMap) ->
-	{ExportKey, FunKey, _CallBacMod, _PathList} = H,
+	{ExportKey, FunKey} = xlsx2erl_tool:config_export_key(H),
 	{Row, _, _} = lists:keyfind(FunKey, 2, HeaderList),
 	Cells = proplists:get_value(Row, ContentList, []),
 	Fun = fun(#excel_cell{v = Value}, Acc) ->
@@ -105,7 +107,7 @@ make_func([H | T], CloumnList, ContentList, HeaderList, AccMap) ->
 	make_func(T, CloumnList, ContentList, HeaderList, NewMap).
 
 make_func_core(CloumnList, List) when is_list(List) ->
-	[make_func_core(CloumnList, {TmpFunName, TmpArity, TmpReturn}) || {TmpFunName, TmpArity, TmpReturn} <- List];
+	[make_func_core(CloumnList, H) || H <- List];
 make_func_core(CloumnList, {TmpFunName, TmpArity, TmpReturn}) ->
 	#excel_fun{
 		fun_name = TmpFunName, 
@@ -117,14 +119,25 @@ default_fun(CloumnList, ExportKey) ->
 	Fun = fun({Cloumn, FieldMap}, {AccKey, Acc}) ->
 		#{name := Name, data_type := DataType} = FieldMap,
 		% xlsx2erl:info("========= FieldMap:~p~n", [FieldMap]),
-		IsKey = maps:get(is_key, FieldMap, ?NOTKEY),
-		IsExport = maps:get(ExportKey, FieldMap, ?EXPORT),
-		NewAccKey = ?IF(IsKey == ?KEY, [{Cloumn, Name, DataType} | AccKey], AccKey),
-		NewAcc = ?IF(IsExport == ?EXPORT, [{Cloumn, Name, DataType} | Acc], Acc),
+		NewAccKey =
+			case maps:get(is_key, FieldMap, ?NOTKEY) of
+				?KEY -> [{Cloumn, Name, DataType} | AccKey];
+				_ -> AccKey
+			end,
+		NewAcc = 
+			case maps:get(ExportKey, FieldMap, ?EXPORT) of
+				?EXPORT -> [{Cloumn, Name, DataType} | Acc];
+				_ -> Acc
+			end,
 		{NewAccKey, NewAcc}
 	end,
 	{Arity, Return} = lists:foldl(Fun, {[], []}, CloumnList),
-	#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN, args = lists:reverse(Arity), values = lists:reverse(Return)}.
+	
+	#excel_fun{
+		fun_name = ?DEFAULT_EXPORT_FUN, 
+		args = lists:reverse(Arity), 
+		values = lists:reverse(Return)
+	}.
 
 transform_args(_CloumnList, [], Acc) -> lists:reverse(Acc);
 transform_args(CloumnList, [Arg | T], Acc) ->
@@ -151,7 +164,7 @@ check_row(BeginRow, Cloumns, ContentList) ->
 check_row_core([], _BeginRow, _KeyCloumn, Acc) -> lists:keysort(1, Acc);
 check_row_core([{Row, Cells} | T], BeginRow, KeyCloumn, Acc) when Row =< BeginRow ->
 	check_row_core(T, BeginRow, KeyCloumn, [{Row, Cells}|Acc]);
-check_row_core([{Row, [#excel_cell{r = Row}|_] = Cells} | T], BeginRow, KeyCloumn, Acc) ->
+check_row_core([{Row, Cells = [#excel_cell{r = Row}|_]} | T], BeginRow, KeyCloumn, Acc) ->
 	CheckRes = check_cloumn_exists(KeyCloumn, Cells),
 	CheckRes ==	false andalso throw({false, Row, lost_key_cloumn}),
 	check_row_core(T, BeginRow, KeyCloumn, [{Row, Cells}|Acc]);

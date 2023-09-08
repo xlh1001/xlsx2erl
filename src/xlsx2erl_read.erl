@@ -99,19 +99,19 @@ make_cell(#xmlElement{attributes = Attrs, content = Content}, SharedTable) ->
 
 row_cloumn(PosStr) ->
 	{Row, Cloumn} = row_cloumn(PosStr, [], []),
-	RowVal = calc_pos(Row, 48, 0, 0),
-	CloumnVal = calc_pos(Cloumn, 65, 0, 0),
+	RowVal = calc_pos(Row, $0, 0, 0),
+	CloumnVal = calc_pos(Cloumn, $A, 0, 0),
 	{RowVal, CloumnVal}.
 
 row_cloumn([], Row, Cloumn) -> {Row, Cloumn};
-row_cloumn([H|T], Row, Cloumn) when H >= 65 andalso H =< 90 ->
+row_cloumn([H|T], Row, Cloumn) when H >= $A andalso H =< $Z ->
 	row_cloumn(T, Row, [H | Cloumn]);
-row_cloumn([H|T], Row, Cloumn) when H >= 48 andalso H =< 57 ->
+row_cloumn([H|T], Row, Cloumn) when H >= $0 andalso H =< $9 ->
 	row_cloumn(T, [H | Row], Cloumn).
 
 %% 转换成10进制行列坐标	
 calc_pos([], _, _, Acc) -> erlang:floor(Acc);
-calc_pos([H|T], 65, Index, Acc) ->  
-	calc_pos(T, 65, Index + 1, Acc + (H - 65 + 1)*math:pow(26, Index));
-calc_pos([H|T], 48, Index, Acc) ->  
-	calc_pos(T, 48, Index + 1, Acc + (H - 48)*math:pow(10, Index)).
+calc_pos([H|T], $A, Index, Acc) ->  
+	calc_pos(T, $A, Index + 1, Acc + (H - $A + 1)*math:pow(26, Index));
+calc_pos([H|T], $0, Index, Acc) ->  
+	calc_pos(T, $0, Index + 1, Acc + (H - $0) * math:pow(10, Index)).

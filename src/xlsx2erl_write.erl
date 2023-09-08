@@ -15,9 +15,14 @@
 
 write_to_file(StateMap, SheetList) ->
 	#{callback_mod := Mods} = StateMap,
-	{ExportKey, FunKey, _CallBacMod, PathKeyList} = lists:keyfind(?MODULE, 3, Mods),
-	CheckPath = lists:member(hrl_path, PathKeyList) andalso lists:member(erl_path, PathKeyList),
+	
+	Record = lists:keyfind(?MODULE, 3, Mods),
+	{ExportKey, FunKey} = xlsx2erl_tool:config_export_key(Record),
+	PathKeyList = xlsx2erl_tool:config_pathkey(Record),
+
+	CheckPath = (PathKeyList -- [erl_path, hrl_path]) == [],
 	CheckPath == false andalso throw({false, ?MODULE, miss_path}),
+
 	[write_erl(ExportKey,FunKey, StateMap, Sheet) || Sheet <- SheetList],
 	ok.
 
@@ -110,7 +115,7 @@ export_fun([#excel_fun{fun_name = FunName, args = Arity} | FuncList], Acc) ->
 	export_fun(FuncList, NewAcc).
 
 make_fun([], _FileName, _Row, _Content, _Record) -> ok;
-make_fun([#excel_fun{fun_name = ?DEFAULT_EXPORT_FUN} = Func|T], FileName, Row, Content, Record) ->
+make_fun([Func = #excel_fun{fun_name = ?DEFAULT_EXPORT_FUN}|T], FileName, Row, Content, Record) ->
 	make_defate_fun(FileName, Func, Row, Content, Record),
 	make_fun(T, FileName, Row, Content, Record);
 make_fun([Func|T], FileName, Row, Content, Record) ->

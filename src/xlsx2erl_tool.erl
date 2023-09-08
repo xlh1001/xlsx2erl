@@ -21,9 +21,13 @@
 
 -export([
     config_header/0, 
+    config_pathkey/0,
+    config_pathkey/1,
     config_callback/0, 
     config_sheet_num/0,
-    config_refresh_time/0
+    config_refresh_time/0,
+    config_export_key/1,
+    config_callback_mod/1
 ]).
 
 %% term反序列化，string转换为term，e.g., "[{a},1]"  => [{a},1]
@@ -93,7 +97,7 @@ change_path(Path) ->
 
 config_header() ->
     List = [
-        {1, comment,        string}
+        {1,  comment,       string}
         ,{2, name,          string}
         ,{3, data_type,     atom}
         ,{4, is_key,        integer}
@@ -101,13 +105,27 @@ config_header() ->
         ,{6, erl_funs,      list}
         ,{7, data_begin,    null}
     ],
-    get_config(header_def, List).
+    lists:keysort(1, get_config(header_def, List)).
 
 config_callback() ->
     List = [
         {export_erl, erl_funs, xlsx2erl_write, [erl_path, hrl_path]}
     ],
     get_config(mod, List).
+
+config_pathkey() ->
+    lists:foldl(fun({_, _, _, PathList}, Acc) ->
+        PathList ++ Acc
+    end, [], config_callback()).
+
+config_pathkey({_, _, _, PathList}) ->
+    PathList.
+
+config_export_key({ExportKey, FunKey, _Mod, _PathList}) ->
+    {ExportKey, FunKey}.
+
+config_callback_mod({_, _, Mod, _}) ->
+    Mod.
 
 config_sheet_num() ->
     get_config(sheet_num, 100).
