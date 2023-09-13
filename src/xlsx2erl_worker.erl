@@ -159,20 +159,39 @@ do_terminate(Reason, _State) ->
 
 do_work([], _State, SheetIds) -> SheetIds;
 do_work([#ets_sheet{id = SheetId, sheet = Sheet} | T], State, SheetIds) ->
-    spawn(fun() -> 
-        do_work_core(SheetId, Sheet, State)
-    end),
+    lists:member(SheetId, SheetIds) == false andalso 
+        spawn(fun() -> 
+            do_work_core(SheetId, Sheet, State)
+        end),
     do_work(T, State, [SheetId | lists:delete(SheetId, SheetIds)]).
 
 do_work_core(SheetId, Sheet, State) ->
     ExcelName = xlsx2erl_loader:get_excel_name(SheetId),
+    #{callback_mod := Mods} = State,
+    ok = write_to_file(Mods, maps:put(excel_name, ExcelName, State), Sheet, 0),
+    cancel_export(SheetId).
+
+write_to_file([], _State, _Sheet, 0) -> ok;
+write_to_file([], State, Sheet, Num) -> 
+    receive
+        do_exported ->
+            write_to_file([], State, Sheet, Num - 1)
+    end;
+write_to_file([Record | T], State, Sheet, Num) ->
+    Parent = self(),
+    spawn(fun() -> callback_do_work(Parent, Record, State, Sheet) end),
+    write_to_file(T, State, Sheet, Num + 1).
+
+callback_do_work(Parent, Record, State, Sheet) ->
+    #{excel_name := ExcelName} = State,
     SheetName = Sheet#excel_sheet.name,
     try
         Time1 = erlang:system_time(millisecond),
-        #{callback_mod := Mods} = State,
-        write_to_file(Mods, maps:put(excel_name, ExcelName, State), [Sheet]),
+        CallBackMod = xlsx2erl_tool:config_callback_mod(Record),
+        CallBackMod:check_export_path(State, Record),
+        CallBackMod:write_erl(State, Record, Sheet),
         Time2 = erlang:system_time(millisecond),
-        Success = {true, Time2 - Time1},
+        Success = {true, CallBackMod, Time2 - Time1},
         handle_export_res(Success, ExcelName, SheetName)
     catch
         throw : Reason : _StackTrace ->
@@ -181,14 +200,8 @@ do_work_core(SheetId, Sheet, State) ->
             Res = {false, {Reason, StackTrace}, server_error},
             handle_export_res(Res, ExcelName, SheetName)
     after
-        cancel_export(SheetId)
+        Parent ! do_exported
     end.
-
-write_to_file([], _State, _NewList) -> ok;
-write_to_file([Record | T], State, NewList) ->
-    CallBacMod = xlsx2erl_tool:config_callback_mod(Record),
-    ok = CallBacMod:write_to_file(State, NewList),
-    write_to_file(T, State, NewList).
 
 info(Str, Args) ->
     xlsx2erl:info(Str, Args).
@@ -227,12 +240,12 @@ handle_export_res({false, Arity, fun_args_not_exist}, ExcelName, SheetName) ->
     info("~ts配置中的子表【~s】导出函数中所需字段~s不存在! ~n",[ExcelName, SheetName, Arity]);
 handle_export_res({false, Mod, miss_path}, ExcelName, SheetName) ->
     info("~ts配置中的子表【~s】导出失败：路径配置缺失 ! Mod:~p~n",[ExcelName, SheetName, Mod]);
-handle_export_res({false, {Name, FunName}, fun_miss_args}, ExcelName, SheetName) ->
-    info("~ts配置中的子表【~s】导出失败：导出函数~s中所需字段~s不存在! ~n",[ExcelName, SheetName, FunName, Name]);
+handle_export_res({false, {CallBackMod, Name, FunName}, fun_miss_args}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】，~p导出失败：导出函数~s中所需字段~s不存在! ~n",[ExcelName, SheetName, CallBackMod, FunName, Name]);
 handle_export_res({false, {Reason, StackTrace}, server_error}, ExcelName, SheetName) ->
     info("~ts配置中的子表【~s】导出失败：~p~n StackTrace:~w~n",[ExcelName, SheetName, Reason, StackTrace]);
-handle_export_res({true, Time}, ExcelName, SheetName) ->
-    info("~ts配置中的子表【~s】导出成功，耗时【~p】ms~n",[ExcelName, SheetName, Time]);
+handle_export_res({true, CallBackMod, Time}, ExcelName, SheetName) ->
+    info("~ts配置中的子表【~s】，~p执行成功，耗时【~p】ms~n",[ExcelName, SheetName, CallBackMod, Time]);
 handle_export_res(_Err, ExcelName, SheetName) ->
     info("~ts配置中的子表【~s】错误 reason :~w ~n",[ExcelName, SheetName, _Err]).
 

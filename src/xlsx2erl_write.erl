@@ -10,29 +10,45 @@
 -include("xlsx2erl.hrl").
 
 
--export([write_to_file/2]).
+-export([check_export_path/2, write_erl/3]).
 
+% StateMap  #{
+% 	excel_path := ExcelPath,
+%     header_def := HeaderList,
+%     callback_mod := Mods,
+%     excel_name := SheetName,
+%     % 加上config中的配置的对应所有配置的key及对应路径{mod, [CallbackCfg...]}
+%     % CallbackCfg = {_, _, _, PathKey(eg: [erl_path, hrl_path] )} 
+%     % eg:
+%     erl_path := ErlPath, 
+%     hrl_path := HrlPath
+%     ...
+% }
+%%
+-callback check_export_path(StateMap :: map(), Record :: tuple()) -> ok.
+-callback write_erl(StateMap :: map(), Record :: tuple(), Sheet :: #excel_sheet{}) -> ok.
 
-write_to_file(StateMap, SheetList) ->
-	#{callback_mod := Mods} = StateMap,
-	
-	Record = lists:keyfind(?MODULE, 3, Mods),
-	{ExportKey, FunKey} = xlsx2erl_tool:config_export_key(Record),
+check_export_path(StateMap, Record) ->
 	PathKeyList = xlsx2erl_tool:config_pathkey(Record),
-
 	CheckPath = (PathKeyList -- [erl_path, hrl_path]) == [],
 	CheckPath == false andalso throw({false, ?MODULE, miss_path}),
-
-	[write_erl(ExportKey,FunKey, StateMap, Sheet) || Sheet <- SheetList],
+	do_check_export_path(StateMap, PathKeyList),
 	ok.
 
-write_erl(ExportKey,FunKey, Map, Sheet) ->
+do_check_export_path(_StateMap, []) -> ok;
+do_check_export_path(StateMap, [PathKey | T]) ->
+	Path = maps:get(PathKey, StateMap, false),
+	Path == false andalso throw({false, ?MODULE, miss_path}),
+	do_check_export_path(StateMap, T).
+
+write_erl(Map, Record, Sheet) ->
 	#{
         hrl_path := HrlPath 
         ,erl_path := ErlPath
         ,header_def := HeaderList
         ,excel_name := FileBaseName
     } = Map,
+    {ExportKey, FunKey} = xlsx2erl_tool:config_export_key(Record),
 	{BeginRow, _, _} = lists:keyfind(data_begin, 2, HeaderList),
 	make_hrl(ExportKey, HrlPath, Sheet),
 	make_erl(BeginRow, FunKey, ErlPath, FileBaseName, Sheet),
@@ -182,7 +198,7 @@ make_fun_args([], _FunName, _Cells, Acc) ->
 	lists:reverse(Acc);
 make_fun_args([{Cloumn, Name, DataType}|T], FunName, Cells, Acc) ->
 	Value = handle_value(DataType, lists:keyfind(Cloumn, #excel_cell.c, Cells)),
-	Value == none andalso throw({false, {Name, FunName}, fun_miss_args}),
+	Value == none andalso throw({false, {?MODULE, Name, FunName}, fun_miss_args}),
 	make_fun_args(T, FunName, Cells, [Value | Acc]).
 
 make_normal_fun_core([], _Cells, List, Acc) -> 
